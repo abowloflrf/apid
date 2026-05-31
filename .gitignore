@@ -1,0 +1,19 @@
+# 编译产物
+/apid
+*.exe
+*.out
+
+# Go
+/vendor/
+
+# TRACE 落盘日志
+/logs/
+
+# 本地环境变量
+.env
+.env.local
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store
