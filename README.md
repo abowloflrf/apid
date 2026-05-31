@@ -1,4 +1,4 @@
-# apid
+# apid: Local LLM API proxy & protocol converter
 
 本地 LLM API 协议转换服务，无 GUI，目前仅支持 Chat Completions 转 Response ，后续计划支持更多协议的转换，Coding Agent 配置托管、Token 使用量统计分析等，类似 cc-switch 的无 GUI 版本纯后端进程版本。
 
