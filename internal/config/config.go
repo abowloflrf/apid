@@ -19,8 +19,11 @@ type Config struct {
 	// UpstreamModel 是转发给上游时实际使用的模型名。
 	// 非空时覆盖客户端请求里的 model；为空则原样透传客户端的 model。
 	UpstreamModel string
-	// TraceDir 非空时开启 TRACE 级别日志：每条请求体落盘到该目录。
+	// TraceDir 非空时开启 TRACE 落盘：每条请求体落盘到该目录。
 	TraceDir string
+	// DB 是项目通用 SQLite 数据库文件路径；空表示不启用。
+	// 当前用于 stats 收集每条请求的指标，后续可加新表（配置 / 审计 / 限流等）。
+	DB string
 }
 
 // Load 从环境变量加载配置，未设置时使用默认值。
@@ -46,6 +49,7 @@ func Load() Config {
 		UpstreamAPIKey:  env("APID_UPSTREAM_API_KEY", ""),
 		UpstreamModel:   env("APID_UPSTREAM_MODEL", ""),
 		TraceDir:        traceDir,
+		DB:              env("APID_DB", ""),
 	}
 }
 

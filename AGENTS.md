@@ -28,6 +28,9 @@ go run .                                          # 启动服务
 - `APID_UPSTREAM_MODEL`（非空则覆盖转发给上游的 `model`，留空则透传客户端的 `model`）
 - `APID_TRACE_DIR` / `APID_TRACE`：开启 TRACE 落盘。显式指定 `APID_TRACE_DIR` 优先；
   否则 `APID_TRACE` 为真（`1`/`true`/`yes`/`on`）时落到 `./logs`。默认关闭、零开销。
+- `APID_DB`：项目通用 SQLite 数据库文件路径（空 = 不启用）。开启后 stats 会在
+  每次请求结束时把指标异步写入 `requests` 表，可直接用 `sqlite3` CLI 查询。
+  默认关闭、零开销。
 
 ## 架构
 
@@ -43,13 +46,29 @@ go run .                                          # 启动服务
   - `stream.go` `StreamChatToResponses`：流式 SSE 转换，是**有状态累加器**(`streamState`)，
     见下。
 - **`internal/upstream`** — `Client.ChatCompletions` 仅负责转发 HTTP 请求，不做任何转换。
+  `Client.Endpoint()` 返回实际转发的完整 URL（`baseURL + "/chat/completions"`），
+  供 stats 等调用方记录「实际转发 URL」而不发起请求。
 - **`internal/trace`** — 可选的 TRACE 落盘。`Tracer.Begin` 为一次请求分配共享的
   时间戳+序号前缀，`Entry.Dump(kind, body)` 把不同形态（`responses` 原始 / `chat` 转换后）
   各存成一个 JSON 文件，便于配对离线 DEBUG。禁用时所有方法可安全空调用、零开销。
   仓库根的 `trace-viewer.html` 是配套的离线查看页面。
+- **`internal/store`** — 项目通用 SQLite 存储层。`Open(path)` 打开数据库文件并跑
+  schema 迁移（`PRAGMA journal_mode=WAL` + `synchronous=NORMAL` + 集中维护的建表
+  SQL），`Store.DB()` 暴露原生 `*sql.DB` 给业务包使用，`Close()` 关闭连接。`path`
+  为空时返回 `(nil, nil)` 表示不启用；schema 集中维护意味着加新表（如配置、审计）
+  都改 `store.go` 一处。
+- **`internal/stats`** — 在 `store` 之上提供请求指标收集：`Record` 结构 + `Recorder`
+  异步落盘。`Recorder` 内部走有界 channel（默认 1024）+ 单 worker goroutine，
+  攒到 64 条或 500ms 就批量 INSERT 到 `requests` 表，热路径只一次 `select { case ch <- r: default: drop }`，
+  永不阻塞。所有方法对 nil 接收者安全；`Close()` 排空 channel 后退出 worker。
+  表 schema：`time / duration_ms / client_protocol / client_path / client_model /
+  upstream_protocol / upstream_url / upstream_model / stream / client_status /
+  upstream_status / input_tokens / output_tokens / total_tokens / cached_tokens / error`。
 - **`internal/server`** — `handleResponses` 编排全流程：解析 → 转换请求 → 转发 →
-  按 `stream` 走流式或非流式响应转换。途中按 `kind` 落 trace。上游非 2xx 时把错误体原样回传。
-- **`main.go`** — 入口 + 优雅退出。
+  按 `stream` 走流式或非流式响应转换。途中按 `kind` 落 trace、按 `stats.Record` 收集
+  指标（defer 一次性上报）。上游非 2xx 时把错误体原样回传。
+- **`main.go`** — 入口 + 优雅退出。`store.Open` → `server.New` → 启动 HTTP，
+  收到退出信号后 `httpServer.Shutdown` → `srv.Close`（排空 stats channel）→ `st.Close`（关 SQLite）。
 
 ### 关键字段映射约定
 

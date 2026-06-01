@@ -9,6 +9,12 @@
 # TRACE 落盘日志
 /logs/
 
+# SQLite 数据库（APID_DB，默认落到 ./data；WAL 模式还会生成 -wal/-shm sidecar）
+/data/
+*.db
+*.db-wal
+*.db-shm
+
 # 本地环境变量
 .env
 .env.local

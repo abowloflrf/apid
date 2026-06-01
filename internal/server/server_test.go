@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/abowloflrf/apid/internal/config"
+	"github.com/abowloflrf/apid/internal/store"
 	"github.com/abowloflrf/apid/internal/types"
 )
 
@@ -53,7 +55,7 @@ func mockUpstream(t *testing.T, stream bool) *httptest.Server {
 }
 
 func newTestServer(upstreamURL string) http.Handler {
-	return New(config.Config{UpstreamBaseURL: upstreamURL}).Handler()
+	return New(config.Config{UpstreamBaseURL: upstreamURL}, nil).Handler()
 }
 
 func TestNonStreaming(t *testing.T) {
@@ -101,7 +103,7 @@ func TestUpstreamModelOverride(t *testing.T) {
 	}))
 	defer up.Close()
 
-	h := New(config.Config{UpstreamBaseURL: up.URL, UpstreamModel: "real-backend-model"}).Handler()
+	h := New(config.Config{UpstreamBaseURL: up.URL, UpstreamModel: "real-backend-model"}, nil).Handler()
 
 	body := `{"model":"gpt-x","input":"你好"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -160,3 +162,110 @@ func TestStreaming(t *testing.T) {
 }
 
 var _ = io.Discard
+
+// TestStatsRecorded 端到端验证：一次成功的非流式请求经由 server 处理后，
+// 指标应被 stats 包异步写入 SQLite，并能查回到关键字段。
+func TestStatsRecorded(t *testing.T) {
+	up := mockUpstream(t, false)
+	defer up.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "apid.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	srv := New(config.Config{UpstreamBaseURL: up.URL}, st)
+	defer srv.Close()
+
+	body := `{"model":"gpt-x","input":"你好"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d", rec.Code)
+	}
+
+	// srv.Close() 在 defer 触发前不会跑，先显式关一次让 worker 把 channel 排空。
+	srv.Close()
+
+	row := st.DB().QueryRow(`SELECT
+		client_model, upstream_url, upstream_model, stream,
+		client_status, upstream_status,
+		input_tokens, output_tokens, total_tokens, cached_tokens
+		FROM requests LIMIT 1`)
+	var (
+		cModel, upURL, upModel string
+		stream, cStatus, upStatus, inTok, outTok, totalTok, cachedTok int
+	)
+	if err := row.Scan(&cModel, &upURL, &upModel, &stream, &cStatus, &upStatus,
+		&inTok, &outTok, &totalTok, &cachedTok); err != nil {
+		t.Fatalf("read back row failed: %v", err)
+	}
+	if cModel != "gpt-x" {
+		t.Errorf("client_model = %q, want gpt-x", cModel)
+	}
+	if upModel != "gpt-x" {
+		t.Errorf("upstream_model = %q, want gpt-x (未配置覆盖时透传)", upModel)
+	}
+	if !strings.HasSuffix(upURL, "/chat/completions") {
+		t.Errorf("upstream_url = %q, 应以 /chat/completions 结尾", upURL)
+	}
+	if stream != 0 {
+		t.Errorf("stream = %d, want 0", stream)
+	}
+	if cStatus != http.StatusOK {
+		t.Errorf("client_status = %d, want 200", cStatus)
+	}
+	if upStatus != http.StatusOK {
+		t.Errorf("upstream_status = %d, want 200", upStatus)
+	}
+	if inTok != 5 || outTok != 3 || totalTok != 8 {
+		t.Errorf("tokens 错: in=%d out=%d total=%d, want 5/3/8", inTok, outTok, totalTok)
+	}
+}
+
+// TestStatsUpstreamError 端到端验证：上游返回 4xx 时，stats 仍记录一行，error 字段非空。
+func TestStatsUpstreamError(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad request"}}`))
+	}))
+	defer up.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "apid.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	srv := New(config.Config{UpstreamBaseURL: up.URL}, st)
+	defer srv.Close()
+
+	body := `{"model":"m","input":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	var clientStatus, upstreamStatus int
+	var errStr *string
+	if err := st.DB().QueryRow(
+		`SELECT client_status, upstream_status, error FROM requests LIMIT 1`,
+	).Scan(&clientStatus, &upstreamStatus, &errStr); err != nil {
+		t.Fatal(err)
+	}
+	if clientStatus != http.StatusBadRequest {
+		t.Errorf("client_status = %d, want 400", clientStatus)
+	}
+	if upstreamStatus != http.StatusBadRequest {
+		t.Errorf("upstream_status = %d, want 400", upstreamStatus)
+	}
+	if errStr == nil || !strings.Contains(*errStr, "bad request") {
+		t.Errorf("error 字段应包含上游错误信息, got %v", errStr)
+	}
+}

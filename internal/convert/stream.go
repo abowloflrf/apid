@@ -18,6 +18,12 @@ type SSEWriter interface {
 	Flush()
 }
 
+// StreamResult 是流式转换的终态结果，目前只承载流末拿到的 usage。
+// 上游未发送 usage 分片时 Usage 为 nil；失败 / 中途出错同样为 nil。
+type StreamResult struct {
+	Usage *types.ChatUsage
+}
+
 // StreamChatToResponses 读取上游 Chat Completions 的 SSE 流，
 // 转换为 Responses API 的事件流并写入 w。支持文本、reasoning 与工具调用三类增量。
 //
@@ -31,7 +37,7 @@ type SSEWriter interface {
 //	response.completed
 // namespaces 是「扁平工具名 -> (命名空间, 本地名)」映射(见 ToolNamespaces)，用于把
 // MCP 工具的 function_call 事件从上游扁平名拆回本地名 + namespace；无命名空间工具传 nil。
-func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) error {
+func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) (*StreamResult, error) {
 	st := &streamState{w: w, model: model, tools: map[int]*toolState{}, namespaces: namespaces}
 
 	emit(w, "response.created", map[string]any{
@@ -62,7 +68,7 @@ func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces
 		if msg := parseStreamError(data); msg != "" {
 			log.Printf("upstream stream error: %s", msg)
 			st.fail(msg)
-			return nil
+			return &StreamResult{}, nil
 		}
 		var chunk types.ChatStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -89,11 +95,11 @@ func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces
 	if err := scanner.Err(); err != nil {
 		// 读流出错(如单行超出缓冲上限)同样补发 response.failed 再返回。
 		st.fail(err.Error())
-		return err
+		return &StreamResult{Usage: st.usage}, err
 	}
 
 	st.finish()
-	return nil
+	return &StreamResult{Usage: st.usage}, nil
 }
 
 // parseStreamError 探测一行 SSE data 是否是上游的错误对象，是则返回错误信息。

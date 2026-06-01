@@ -26,6 +26,14 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
+// Endpoint 返回实际转发的完整 URL（baseURL + "/chat/completions"）。
+// 不发起请求，仅供 stats 等调用方记录「实际转发 URL」。
+func (c *Client) Endpoint() string {
+	return c.baseURL + chatCompletionsPath
+}
+
+const chatCompletionsPath = "/chat/completions"
+
 // ChatCompletions 向上游发起一次 chat/completions 请求。
 // 鉴权优先用配置的 apiKey；apiKey 为空时才回退到透传客户端凭证 authOverride。
 // 调用方负责关闭返回的 resp.Body。
@@ -35,7 +43,7 @@ func (c *Client) ChatCompletions(ctx context.Context, req *types.ChatRequest, au
 		return nil, err
 	}
 
-	url := c.baseURL + "/chat/completions"
+	url := c.baseURL + chatCompletionsPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

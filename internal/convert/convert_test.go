@@ -287,7 +287,7 @@ func TestStreamIncompleteOnLength(t *testing.T) {
 		"data: " + `{"choices":[{"delta":{},"finish_reason":"length"}]}` + "\n\n" +
 		"data: [DONE]\n\n"
 	var s sink
-	if err := StreamChatToResponses(&s, strings.NewReader(raw), "m", nil); err != nil {
+	if _, err := StreamChatToResponses(&s, strings.NewReader(raw), "m", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := s.b.String()
@@ -307,7 +307,7 @@ func TestStreamUpstreamError(t *testing.T) {
 	raw := "data: " + `{"choices":[{"delta":{"content":"开头"}}]}` + "\n\n" +
 		"data: " + `{"error":{"message":"upstream blew up","type":"server_error"}}` + "\n\n"
 	var s sink
-	if err := StreamChatToResponses(&s, strings.NewReader(raw), "m", nil); err != nil {
+	if _, err := StreamChatToResponses(&s, strings.NewReader(raw), "m", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := s.b.String()
@@ -387,7 +387,7 @@ func TestStreamNamespaceRestored(t *testing.T) {
 		"\n\ndata: [DONE]\n\n"
 
 	var s sink
-	if err := StreamChatToResponses(&s, strings.NewReader(raw), "m", ns); err != nil {
+	if _, err := StreamChatToResponses(&s, strings.NewReader(raw), "m", ns); err != nil {
 		t.Fatal(err)
 	}
 	out := s.b.String()
@@ -417,7 +417,7 @@ func TestStreamToolsAndReasoning(t *testing.T) {
 	raw.WriteString("data: [DONE]\n\n")
 
 	var s sink
-	if err := StreamChatToResponses(&s, strings.NewReader(raw.String()), "m", nil); err != nil {
+	if _, err := StreamChatToResponses(&s, strings.NewReader(raw.String()), "m", nil); err != nil {
 		t.Fatal(err)
 	}
 	out := s.b.String()
