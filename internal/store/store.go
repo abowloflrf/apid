@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     time              TEXT    NOT NULL,
     duration_ms       INTEGER NOT NULL,
+    ttft_ms           INTEGER,
     client_protocol   TEXT    NOT NULL,
     client_path       TEXT    NOT NULL,
     client_model      TEXT    NOT NULL,

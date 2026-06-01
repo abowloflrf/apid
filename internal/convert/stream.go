@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abowloflrf/apid/internal/types"
 )
@@ -18,10 +19,13 @@ type SSEWriter interface {
 	Flush()
 }
 
-// StreamResult 是流式转换的终态结果，目前只承载流末拿到的 usage。
+// StreamResult 是流式转换的终态结果，承载流末拿到的 usage 与首 token 时刻。
 // 上游未发送 usage 分片时 Usage 为 nil；失败 / 中途出错同样为 nil。
+// FirstTokenAt 是收到上游第一个有内容增量(文本 / reasoning / tool_call)的时刻，
+// 供调用方计算 TTFT；整条流没有任何内容增量时为零值(IsZero() 为 true)。
 type StreamResult struct {
-	Usage *types.ChatUsage
+	Usage        *types.ChatUsage
+	FirstTokenAt time.Time
 }
 
 // StreamChatToResponses 读取上游 Chat Completions 的 SSE 流，
@@ -95,11 +99,11 @@ func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces
 	if err := scanner.Err(); err != nil {
 		// 读流出错(如单行超出缓冲上限)同样补发 response.failed 再返回。
 		st.fail(err.Error())
-		return &StreamResult{Usage: st.usage}, err
+		return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
 	}
 
 	st.finish()
-	return &StreamResult{Usage: st.usage}, nil
+	return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, nil
 }
 
 // parseStreamError 探测一行 SSE data 是否是上游的错误对象，是则返回错误信息。
@@ -126,6 +130,9 @@ type streamState struct {
 	w     SSEWriter
 	model string
 	usage *types.ChatUsage
+
+	// 收到第一个有内容增量的时刻，用于 TTFT；后续增量不再覆盖。
+	firstTokenAt time.Time
 
 	// 上游最后一个非空 finish_reason，收尾时映射为 Responses 状态。
 	finishReason string
@@ -178,6 +185,11 @@ func (st *streamState) functionCallItem(ts *toolState, status, args string) map[
 
 // handleDelta 处理一个 chat 分片的 delta。
 func (st *streamState) handleDelta(d types.ChatChunkDelta) {
+	// 第一个携带实际内容的增量决定 TTFT；空 delta(仅 finish_reason 等)不计入。
+	if st.firstTokenAt.IsZero() &&
+		(d.ReasoningContent != "" || d.Content != "" || len(d.ToolCalls) > 0) {
+		st.firstTokenAt = time.Now()
+	}
 	if d.ReasoningContent != "" {
 		st.handleReasoning(d.ReasoningContent)
 	}

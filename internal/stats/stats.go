@@ -33,6 +33,10 @@ type Record struct {
 	ClientStatus int
 	Stream       bool
 
+	// TTFT 是首 token 耗时，仅流式请求且收到至少一个内容增量时为正；
+	// 非流式 / 失败 / 无内容时为 0，落盘写 NULL（表示"未测量"）。
+	TTFT time.Duration
+
 	UpstreamURL    string
 	UpstreamModel  string
 	UpstreamStatus int
@@ -138,13 +142,13 @@ func (r *Recorder) run() {
 }
 
 const insertSQL = `INSERT INTO requests (
-	time, duration_ms,
+	time, duration_ms, ttft_ms,
 	client_protocol, client_path, client_model,
 	upstream_protocol, upstream_url, upstream_model,
 	stream, client_status, upstream_status,
 	input_tokens, output_tokens, total_tokens, cached_tokens,
 	error
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // writeBatch 在一个事务里批量 INSERT 所有记录。
 func writeBatch(db *sql.DB, records []Record) error {
@@ -179,6 +183,7 @@ func writeBatch(db *sql.DB, records []Record) error {
 		if _, err := stmt.Exec(
 			rec.Time.UTC().Format(time.RFC3339Nano),
 			rec.Duration.Milliseconds(),
+			ttftMillis(rec.TTFT),
 			protocolClient,
 			rec.ClientPath,
 			rec.ClientModel,
@@ -203,4 +208,13 @@ func nullString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// ttftMillis 把 TTFT 转成毫秒；未测量(<=0)时返回 nil 写 NULL，
+// 与 duration_ms(总是有值) 区分开，避免把"没测到"误读成"0ms"。
+func ttftMillis(d time.Duration) any {
+	if d <= 0 {
+		return nil
+	}
+	return d.Milliseconds()
 }

@@ -148,7 +148,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		s.streamResponse(rec, resp.Body, req.Model, namespaces, &stat)
+		s.streamResponse(rec, resp.Body, req.Model, namespaces, &stat, start)
 		return
 	}
 	s.jsonResponse(rec, resp.Body, namespaces, &stat)
@@ -173,8 +173,9 @@ func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces 
 }
 
 // streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流。
-// 流末的 usage 通过 result 带回到 stat，由 defer 落盘。
-func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record) {
+// 流末的 usage、首 token 时刻通过 result 带回到 stat，由 defer 落盘。
+// start 是整条请求的起点，用于把首 token 时刻换算成 TTFT(客户端视角的端到端首字节)。
+func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		stat.Error = "streaming not supported"
@@ -192,8 +193,13 @@ func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model str
 		log.Printf("stream conversion error: %v", err)
 		stat.Error = "stream conversion: " + err.Error()
 	}
-	if result != nil && result.Usage != nil {
-		stat.Usage = toStatsUsage(result.Usage)
+	if result != nil {
+		if result.Usage != nil {
+			stat.Usage = toStatsUsage(result.Usage)
+		}
+		if !result.FirstTokenAt.IsZero() {
+			stat.TTFT = result.FirstTokenAt.Sub(start)
+		}
 	}
 }
 

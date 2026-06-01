@@ -61,9 +61,10 @@ go run .                                          # 启动服务
   异步落盘。`Recorder` 内部走有界 channel（默认 1024）+ 单 worker goroutine，
   攒到 64 条或 500ms 就批量 INSERT 到 `requests` 表，热路径只一次 `select { case ch <- r: default: drop }`，
   永不阻塞。所有方法对 nil 接收者安全；`Close()` 排空 channel 后退出 worker。
-  表 schema：`time / duration_ms / client_protocol / client_path / client_model /
+  表 schema：`time / duration_ms / ttft_ms / client_protocol / client_path / client_model /
   upstream_protocol / upstream_url / upstream_model / stream / client_status /
   upstream_status / input_tokens / output_tokens / total_tokens / cached_tokens / error`。
+  `ttft_ms`（首 token 耗时）仅流式且收到内容增量时有值，非流式 / 失败时为 NULL。
 - **`internal/server`** — `handleResponses` 编排全流程：解析 → 转换请求 → 转发 →
   按 `stream` 走流式或非流式响应转换。途中按 `kind` 落 trace、按 `stats.Record` 收集
   指标（defer 一次性上报）。上游非 2xx 时把错误体原样回传。
