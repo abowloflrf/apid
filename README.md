@@ -2,16 +2,16 @@
 
 本地 LLM API 网关，无 GUI。按暴露路径配置多条转发路由：两端协议不同则做协议转换
 （目前支持 Responses → Chat Completions），两端协议相同则纯转发（不改请求、仅统计
-token 等指标）。后续计划支持更多协议转换、Coding Agent 配置托管、Token 使用量分析等，
-类似 cc-switch 的无 GUI 纯后端进程版本。
+token 等指标）。请求指标可异步落盘到 SQLite 做用量分析（见「统计」）。后续计划支持
+更多协议转换、Coding Agent 配置托管等，类似 cc-switch 的无 GUI 纯后端进程版本。
 
 ```
 本地应用 ⇄ Responses ⇄ apid ⇄ Chat Completions ⇄ 远程上游   (协议转换)
-本地应用 ⇄ Chat      ⇄ apid ⇄ Chat               ⇄ 远程上游   (纯转发 + 统计)
+本地应用 ⇄ Chat/Resp ⇄ apid ⇄ Chat/Resp        ⇄ 远程上游   (纯转发 + 统计，两端同协议)
 ```
 
 转换路由已支持文本、工具调用（function calling）和 reasoning。暂不支持图片/文件输入、
-内置工具（web_search 等）、annotations、多模态输出。
+内置工具（web_search 等）、annotations、多模态输出、`previous_response_id` 多轮状态。
 
 ## 运行
 
@@ -68,13 +68,24 @@ main.go            入口、优雅退出
 internal/config    运维环境变量 + TOML 路由配置
 internal/types     Responses / Chat 两套数据结构
 internal/convert   请求、响应、流式三类转换
-internal/upstream  转发上游的 HTTP 客户端（每路由一个）
+internal/upstream  转发上游的 HTTP 客户端（每个 upstream 一个，按 name 被多条路由复用）
 internal/server    多路由分派：协议转换 / 纯转发 + 指标采集
+internal/trace     可选的请求 TRACE 落盘（离线 DEBUG）
 internal/store     通用 SQLite 存储
 internal/stats     请求指标异步落盘
 ```
 
 字段映射的细节见 `CLAUDE.md` 和各 `convert/*.go`。
+
+## 统计
+
+设置 `APID_DB` 指向一个 SQLite 文件即开启请求指标采集（默认关闭、零开销），每次请求结束
+异步写入 `requests` 表（耗时 / TTFT / 协议 / model / token 用量 / 状态码等）：
+
+```bash
+APID_DB=apid.db go run . --config config.toml
+sqlite3 apid.db < scripts/apid-stats.sql   # 预置的用量分析查询
+```
 
 ## 测试
 
