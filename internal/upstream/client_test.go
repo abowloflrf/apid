@@ -2,9 +2,13 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/abowloflrf/apid/internal/types"
 )
 
 // TestForwardHeaderPassthrough asserts business headers reach the upstream while
@@ -78,5 +82,45 @@ func TestForwardAuthFallback(t *testing.T) {
 
 	if got != "Bearer client-tok" {
 		t.Errorf("Authorization = %q, want client token passthrough", got)
+	}
+}
+
+// TestChatCompletions asserts the thin wrapper marshals the request and POSTs it
+// to Endpoint() with the configured auth, and surfaces the upstream response.
+func TestChatCompletions(t *testing.T) {
+	var gotBody []byte
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "/v1/chat/completions", "secret-key")
+	req := &types.ChatRequest{
+		Model:    "deepseek-chat",
+		Messages: []types.ChatMessage{{Role: "user", Content: "hi"}},
+	}
+
+	resp, err := c.ChatCompletions(context.Background(), req, http.Header{})
+	if err != nil {
+		t.Fatalf("ChatCompletions: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("Authorization = %q, want apiKey", gotAuth)
+	}
+	var sent types.ChatRequest
+	if err := json.Unmarshal(gotBody, &sent); err != nil {
+		t.Fatalf("upstream got non-JSON body %q: %v", gotBody, err)
+	}
+	if sent.Model != "deepseek-chat" || len(sent.Messages) != 1 {
+		t.Errorf("upstream body = %+v, want model=deepseek-chat with 1 message", sent)
 	}
 }

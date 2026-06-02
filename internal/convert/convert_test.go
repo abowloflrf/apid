@@ -215,6 +215,148 @@ func TestRequestNamespaceToolConversation(t *testing.T) {
 	}
 }
 
+func TestRequestReasoningRoundTrip(t *testing.T) {
+	// 多轮 reasoning 回传：reasoning 项的 summary 文本要拼起来并挂到紧随其后的
+	// assistant 消息(此处是 function_call)上，否则思考模型上游会报
+	// "reasoning_content in the thinking mode must be passed back"。
+	// 同时连续的 function_call(并行调用)必须合并进同一条 assistant.tool_calls。
+	body := `{"model":"m","input":[
+      {"role":"user","content":"天气?"},
+      {"type":"reasoning","summary":[{"type":"summary_text","text":"思考A"},{"type":"summary_text","text":"思考B"}]},
+      {"type":"function_call","call_id":"c1","name":"get_weather","arguments":"{}"},
+      {"type":"function_call","call_id":"c2","name":"get_air","arguments":"{}"},
+      {"type":"function_call_output","call_id":"c1","output":"晴"}
+    ]}`
+	var req types.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// user + 一条合并了两次并行调用的 assistant + 一条 tool。
+	if len(chat.Messages) != 3 {
+		t.Fatalf("消息数 = %d, 期望 3: %+v", len(chat.Messages), chat.Messages)
+	}
+	asst := chat.Messages[1]
+	if asst.Role != "assistant" {
+		t.Fatalf("第二条应为 assistant: %+v", asst)
+	}
+	if asst.ReasoningContent != "思考A思考B" {
+		t.Errorf("reasoning summary 未拼接并回传, 实际 %q", asst.ReasoningContent)
+	}
+	if len(asst.ToolCalls) != 2 {
+		t.Errorf("并行 function_call 未合并进同一条 assistant.tool_calls: %+v", asst.ToolCalls)
+	}
+}
+
+func TestRequestReasoningBeforeMessage(t *testing.T) {
+	// reasoning 项紧跟一条 assistant 文本消息时，reasoning 文本应挂到该消息上。
+	body := `{"model":"m","input":[
+      {"type":"reasoning","summary":[{"type":"summary_text","text":"先想"}]},
+      {"role":"assistant","content":"答案"}
+    ]}`
+	var req types.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 1 {
+		t.Fatalf("消息数 = %d, 期望 1: %+v", len(chat.Messages), chat.Messages)
+	}
+	m := chat.Messages[0]
+	if m.Role != "assistant" || m.Content != "答案" || m.ReasoningContent != "先想" {
+		t.Errorf("reasoning 未挂到后续 assistant 消息: %+v", m)
+	}
+}
+
+func TestRequestContentBlockArray(t *testing.T) {
+	// message.content 与 function_call_output.output 都可能是内容块数组，
+	// extractText 应拼接其中所有文本块,而不是丢弃。
+	body := `{"model":"m","input":[
+      {"role":"user","content":[{"type":"input_text","text":"a"},{"type":"input_text","text":"b"}]},
+      {"type":"function_call_output","call_id":"c1","output":[{"type":"output_text","text":"x"},{"type":"output_text","text":"y"}]}
+    ]}`
+	var req types.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 2 {
+		t.Fatalf("消息数 = %d, 期望 2: %+v", len(chat.Messages), chat.Messages)
+	}
+	if chat.Messages[0].Content != "ab" {
+		t.Errorf("user content 数组未拼接, 实际 %q", chat.Messages[0].Content)
+	}
+	if chat.Messages[1].Role != "tool" || chat.Messages[1].Content != "xy" {
+		t.Errorf("function_call_output 数组未拼接: %+v", chat.Messages[1])
+	}
+}
+
+func TestRequestDeveloperRole(t *testing.T) {
+	// Responses 的 "developer" 角色 Chat Completions 不认，应归一为 "system"。
+	body := `{"model":"m","input":[{"role":"developer","content":"开发者指令"}]}`
+	var req types.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 1 || chat.Messages[0].Role != "system" {
+		t.Errorf("developer 角色未归一为 system: %+v", chat.Messages)
+	}
+}
+
+func TestResponseContentFilter(t *testing.T) {
+	// finish_reason=content_filter 应报 incomplete + reason content_filter，
+	// 而不是谎报 completed。
+	chat := &types.ChatResponse{
+		ID: "chatcmpl-x", Created: 1, Model: "m",
+		Choices: []types.ChatChoice{{
+			Message:      types.ChatMessage{Role: "assistant", Content: "被过滤"},
+			FinishReason: "content_filter",
+		}},
+	}
+	resp := ChatToResponses(chat, nil)
+	if resp.Status != "incomplete" {
+		t.Errorf("status = %q, 期望 incomplete", resp.Status)
+	}
+	if resp.IncompleteDetails == nil || resp.IncompleteDetails.Reason != "content_filter" {
+		t.Errorf("incomplete_details 不对: %+v", resp.IncompleteDetails)
+	}
+}
+
+func TestStreamReadError(t *testing.T) {
+	// 单行超出扫描缓冲上限(1MB)会让 bufio.Scanner 报错；此时已发过
+	// response.created，必须补发 response.failed 并向上返回错误，
+	// 否则客户端等不到收尾事件会挂死。
+	raw := "data: " + strings.Repeat("a", 2*1024*1024)
+	var s sink
+	result, err := StreamChatToResponses(&s, strings.NewReader(raw), "m", nil)
+	if err == nil {
+		t.Fatal("超长行应返回扫描错误")
+	}
+	if result == nil {
+		t.Fatal("出错时也应返回非 nil 的 StreamResult")
+	}
+	out := s.b.String()
+	if !strings.Contains(out, "event: response.failed") {
+		t.Errorf("读流出错应补发 response.failed, 输出前缀:\n%.200s", out)
+	}
+	if strings.Contains(out, "event: response.completed") {
+		t.Errorf("出错时不应发 response.completed")
+	}
+}
+
 func TestResponseToolsAndReasoning(t *testing.T) {
 	chat := &types.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",

@@ -315,3 +315,101 @@ func TestLoadFileMissing(t *testing.T) {
 		t.Fatal("missing file should error")
 	}
 }
+
+// minimalTOML is the smallest config that passes validation, used by Load tests
+// that only care about the env-derived fields.
+const minimalTOML = `
+[[upstream]]
+name = "u"
+protocol = "openai_chat_completions"
+base_url = "https://api.example.com"
+path = "/v1/chat/completions"
+[[route]]
+path = "/v1/chat/completions"
+input_protocol = "openai_chat_completions"
+[[route.model]]
+upstream = "u"`
+
+// isolateEnv points APID_ENV_FILE at a non-existent path so Load won't pick up a
+// real .env in the working dir, and clears the vars Load reads so the host's
+// environment can't leak into assertions.
+func isolateEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("APID_ENV_FILE", filepath.Join(t.TempDir(), "no.env"))
+	t.Setenv("APID_LISTEN", "")
+	t.Setenv("APID_DB", "")
+	t.Setenv("APID_TRACE", "")
+	t.Setenv("APID_TRACE_DIR", "")
+}
+
+func TestLoadDefaults(t *testing.T) {
+	isolateEnv(t)
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Listen != ":19092" {
+		t.Errorf("Listen = %q, want default :19092", cfg.Listen)
+	}
+	if cfg.DB != "" || cfg.TraceDir != "" {
+		t.Errorf("DB=%q TraceDir=%q, want both empty", cfg.DB, cfg.TraceDir)
+	}
+	if len(cfg.Upstreams) != 1 || len(cfg.Routes) != 1 {
+		t.Errorf("got %d upstreams, %d routes; want 1/1", len(cfg.Upstreams), len(cfg.Routes))
+	}
+}
+
+func TestLoadEnvOverrides(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_LISTEN", ":8080")
+	t.Setenv("APID_DB", "/tmp/apid.db")
+	t.Setenv("APID_TRACE_DIR", "/var/trace")
+
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Listen != ":8080" {
+		t.Errorf("Listen = %q, want :8080", cfg.Listen)
+	}
+	if cfg.DB != "/tmp/apid.db" {
+		t.Errorf("DB = %q, want /tmp/apid.db", cfg.DB)
+	}
+	if cfg.TraceDir != "/var/trace" {
+		t.Errorf("TraceDir = %q, want /var/trace", cfg.TraceDir)
+	}
+}
+
+// APID_TRACE=1 with no explicit dir defaults the trace dir to ./logs.
+func TestLoadTraceDefaultDir(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_TRACE", "1")
+
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TraceDir != "./logs" {
+		t.Errorf("TraceDir = %q, want ./logs", cfg.TraceDir)
+	}
+}
+
+func TestLoadInvalidConfig(t *testing.T) {
+	isolateEnv(t)
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.toml")); err == nil {
+		t.Fatal("Load with missing config should error")
+	}
+}
+
+func TestTruthy(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on"} {
+		if !truthy(v) {
+			t.Errorf("truthy(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no", "off", "maybe"} {
+		if truthy(v) {
+			t.Errorf("truthy(%q) = true, want false", v)
+		}
+	}
+}
