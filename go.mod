@@ -3,6 +3,7 @@ module github.com/abowloflrf/apid
 go 1.26.3
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/joho/godotenv v1.5.1
 	modernc.org/sqlite v1.51.0
 )

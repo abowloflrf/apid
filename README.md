@@ -1,24 +1,34 @@
 # apid: Local LLM API proxy & protocol converter
 
-本地 LLM API 协议转换服务，无 GUI，目前仅支持 Chat Completions 转 Response ，后续计划支持更多协议的转换，Coding Agent 配置托管、Token 使用量统计分析等，类似 cc-switch 的无 GUI 版本纯后端进程版本。
+本地 LLM API 网关，无 GUI。按暴露路径配置多条转发路由：两端协议不同则做协议转换
+（目前支持 Responses → Chat Completions），两端协议相同则纯转发（不改请求、仅统计
+token 等指标）。后续计划支持更多协议转换、Coding Agent 配置托管、Token 使用量分析等，
+类似 cc-switch 的无 GUI 纯后端进程版本。
 
 ```
-本地应用 ⇄ Responses ⇄ apid ⇄ Chat Completions ⇄ 远程上游
+本地应用 ⇄ Responses ⇄ apid ⇄ Chat Completions ⇄ 远程上游   (协议转换)
+本地应用 ⇄ Chat      ⇄ apid ⇄ Chat               ⇄ 远程上游   (纯转发 + 统计)
 ```
 
-已支持文本、工具调用（function calling）和 reasoning。暂不支持图片/文件输入、
+转换路由已支持文本、工具调用（function calling）和 reasoning。暂不支持图片/文件输入、
 内置工具（web_search 等）、annotations、多模态输出。
 
 ## 运行
 
-```bash
-export APID_UPSTREAM_BASE_URL="https://api.deepseek.com"   # 上游基础地址
-export APID_UPSTREAM_API_KEY="sk-..."                        # 上游 Key，留空则透传客户端 Authorization
-export APID_UPSTREAM_MODEL="deepseek-v4-flash"                    # 覆盖转发的模型名，留空则透传客户端 model
-export APID_LISTEN=":19092"                                    # 监听地址，默认 :8080
+转发路由配置在 TOML 文件里（默认 `apid.toml`，可用 `APID_CONFIG` 指定路径）。
+先复制示例并按需修改：
 
+```bash
+cp apid.example.toml apid.toml   # 编辑里面的上游地址 / 协议 / Key / 模型
+
+export APID_LISTEN=":19092"      # 监听地址，默认 :8080（运维参数仍走环境变量）
 go run .
 ```
+
+配置分两张表：`[[upstream]]` 定义后端（协议 / 地址 / Key / 模型），定义一次按 `name` 复用；
+`[[route]]` 是对外入口（`path` + `input_protocol`），按请求里的 `model` 匹配（精确 > glob >
+兜底）引用某个 upstream。入口协议与所选 upstream 协议相等时纯转发，否则协议转换。
+详见 `apid.example.toml`。
 
 ## 调用
 
@@ -55,11 +65,13 @@ curl http://localhost:8080/v1/responses \
 
 ```
 main.go            入口、优雅退出
-internal/config    环境变量配置
+internal/config    运维环境变量 + TOML 路由配置
 internal/types     Responses / Chat 两套数据结构
 internal/convert   请求、响应、流式三类转换
-internal/upstream  转发上游的 HTTP 客户端
-internal/server    HTTP 服务与路由
+internal/upstream  转发上游的 HTTP 客户端（每路由一个）
+internal/server    多路由分派：协议转换 / 纯转发 + 指标采集
+internal/store     通用 SQLite 存储
+internal/stats     请求指标异步落盘
 ```
 
 字段映射的细节见 `CLAUDE.md` 和各 `convert/*.go`。

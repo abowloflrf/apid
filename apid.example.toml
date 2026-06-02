@@ -1,0 +1,49 @@
+# apid forwarding config example.
+# Copy to apid.toml (or point APID_CONFIG at it) and edit.
+# Ops params (listen addr / SQLite / TRACE) stay in env vars; see CLAUDE.md.
+#
+# Two tables:
+#   [[upstream]] — a backend, defined once and referenced by name.
+#   [[route]]    — a public entrypoint (path + client protocol) that dispatches
+#                  by the request's model to one upstream.
+#
+# Conversion happens when a route's input_protocol differs from the matched
+# upstream's protocol (currently only openai_responses -> openai_chat_completions).
+# Equal protocols = pure forward (bytes passed through, metrics still collected).
+# Protocols: openai_responses, openai_chat_completions.
+
+# ── Upstreams: write each backend once, reuse from any entrypoint. ──
+[[upstream]]
+name = "deepseek"
+protocol = "openai_chat_completions"
+base_url = "https://api.deepseek.com/v1"
+path = "/chat/completions"
+api_key = "sk-xxx"        # empty = pass through the client's Authorization
+model = "deepseek-chat"   # empty = pass through the client's model
+
+[[upstream]]
+name = "openai"
+protocol = "openai_chat_completions"
+base_url = "https://api.openai.com"
+path = "/v1/chat/completions"
+
+# ── Responses entrypoint: clients speak Responses API, dispatched by model. ──
+[[route]]
+path = "/v1/responses"
+input_protocol = "openai_responses"
+
+  [[route.model]]
+  match = "deepseek-*"     # exact name or glob
+  upstream = "deepseek"    # convert (responses -> chat) since protocols differ
+
+  [[route.model]]
+  match = "*"              # empty or "*" = catch-all (at most one)
+  upstream = "openai"
+
+# ── Chat entrypoint: same upstreams reused, no duplication of backend info. ──
+[[route]]
+path = "/v1/chat/completions"
+input_protocol = "openai_chat_completions"
+
+  [[route.model]]
+  upstream = "openai"      # equal protocols => pure forward

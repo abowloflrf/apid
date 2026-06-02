@@ -18,7 +18,10 @@ import (
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config load failed: %v", err)
+	}
 
 	// 通用 SQLite 存储。cfg.DB 为空时 store.Open 返回 (nil, nil)，
 	// 表示不启用，server 里所有持久化调用 nil-check 后跳过。
@@ -49,7 +52,21 @@ func main() {
 		close(idleClosed)
 	}()
 
-	log.Printf("apid started: listening on %s, upstream %s", cfg.Listen, cfg.UpstreamBaseURL)
+	log.Printf("apid started: listening on %s, %d upstream(s), %d route(s)",
+		cfg.Listen, len(cfg.Upstreams), len(cfg.Routes))
+	for _, u := range cfg.Upstreams {
+		log.Printf("  upstream %q -> %s%s [%s]", u.Name, u.BaseURL, u.Path, u.Protocol)
+	}
+	for _, rt := range cfg.Routes {
+		for _, m := range rt.Models {
+			match := m.Match
+			if match == "" {
+				match = "*"
+			}
+			log.Printf("  route %s [%s] model %q -> upstream %q",
+				rt.Path, rt.InputProtocol, match, m.Upstream)
+		}
+	}
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server exited unexpectedly: %v", err)
 	}

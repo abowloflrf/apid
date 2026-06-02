@@ -26,18 +26,22 @@ func TestRecorderRoundTrip(t *testing.T) {
 	records := []Record{
 		{
 			Time: now, Duration: 100 * time.Millisecond,
-			ClientPath: "/v1/responses", ClientModel: "gpt-x",
+			ClientProtocol: "openai_responses",
+			ClientPath:     "/v1/responses", ClientModel: "gpt-x",
 			ClientStatus: 200, Stream: false,
-			UpstreamURL:    "https://api.example.com/v1/chat/completions",
-			UpstreamModel:  "real", UpstreamStatus: 200,
+			UpstreamProtocol: "openai_chat_completions",
+			UpstreamURL:      "https://api.example.com/v1/chat/completions",
+			UpstreamModel:    "real", UpstreamStatus: 200,
 			Usage: &Usage{InputTokens: 5, OutputTokens: 3, TotalTokens: 8, CachedTokens: 2},
 		},
 		{
 			Time: now.Add(time.Second), Duration: 200 * time.Millisecond,
-			ClientPath: "/v1/responses", ClientModel: "gpt-y",
+			ClientProtocol: "openai_responses",
+			ClientPath:     "/v1/responses", ClientModel: "gpt-y",
 			ClientStatus: 502, Stream: true,
-			UpstreamURL:    "https://api.example.com/v1/chat/completions",
-			UpstreamModel:  "real", UpstreamStatus: 502,
+			UpstreamProtocol: "openai_chat_completions",
+			UpstreamURL:      "https://api.example.com/v1/chat/completions",
+			UpstreamModel:    "real", UpstreamStatus: 502,
 			Error: "upstream 502",
 		},
 	}
@@ -62,7 +66,7 @@ func TestRecorderRoundTrip(t *testing.T) {
 	var count int
 	for rows.Next() {
 		var (
-			timeStr, cPath, cModel, upURL, upModel, cProto, upProto, errStr string
+			timeStr, cPath, cModel, upURL, upModel, cProto, upProto, errStr         string
 			duration, cStatus, upStatus, stream, inTok, outTok, totalTok, cachedTok int
 		)
 		if err := rows.Scan(&timeStr, &duration,
@@ -116,12 +120,12 @@ func TestRecorderEmptyError(t *testing.T) {
 	defer st.Close()
 	r := NewRecorder(st, 0)
 	r.Record(Record{
-		Time: time.Now(), ClientPath: "/x", ClientModel: "m",
-		ClientStatus: 200, UpstreamURL: "u", UpstreamModel: "m",
+		Time: time.Now(), ClientProtocol: "openai_responses", ClientPath: "/x", ClientModel: "m",
+		ClientStatus: 200, UpstreamProtocol: "openai_chat_completions", UpstreamURL: "u", UpstreamModel: "m",
 	})
 	r.Record(Record{
-		Time: time.Now(), ClientPath: "/y", ClientModel: "m",
-		ClientStatus: 500, UpstreamURL: "u", UpstreamModel: "m",
+		Time: time.Now(), ClientProtocol: "openai_responses", ClientPath: "/y", ClientModel: "m",
+		ClientStatus: 500, UpstreamProtocol: "openai_chat_completions", UpstreamURL: "u", UpstreamModel: "m",
 		Error: "boom",
 	})
 	r.Close()

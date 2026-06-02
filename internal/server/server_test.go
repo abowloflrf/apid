@@ -54,8 +54,26 @@ func mockUpstream(t *testing.T, stream bool) *httptest.Server {
 	}))
 }
 
+// convertRoute builds a responses -> chat convert config with one upstream.
+func convertRoute(upstreamURL, model string) config.Config {
+	return config.Config{
+		Upstreams: []config.Upstream{{
+			Name:     "up",
+			Protocol: config.ProtoChat,
+			BaseURL:  upstreamURL,
+			Path:     "/chat/completions",
+			Model:    model,
+		}},
+		Routes: []config.Route{{
+			Path:          "/v1/responses",
+			InputProtocol: config.ProtoResponses,
+			Models:        []config.ModelRule{{Match: "*", Upstream: "up"}},
+		}},
+	}
+}
+
 func newTestServer(upstreamURL string) http.Handler {
-	return New(config.Config{UpstreamBaseURL: upstreamURL}, nil).Handler()
+	return New(convertRoute(upstreamURL, ""), nil).Handler()
 }
 
 func TestNonStreaming(t *testing.T) {
@@ -103,7 +121,7 @@ func TestUpstreamModelOverride(t *testing.T) {
 	}))
 	defer up.Close()
 
-	h := New(config.Config{UpstreamBaseURL: up.URL, UpstreamModel: "real-backend-model"}, nil).Handler()
+	h := New(convertRoute(up.URL, "real-backend-model"), nil).Handler()
 
 	body := `{"model":"gpt-x","input":"你好"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -176,7 +194,7 @@ func TestStatsRecorded(t *testing.T) {
 	}
 	defer st.Close()
 
-	srv := New(config.Config{UpstreamBaseURL: up.URL}, st)
+	srv := New(convertRoute(up.URL, ""), st)
 	defer srv.Close()
 
 	body := `{"model":"gpt-x","input":"你好"}`
@@ -197,7 +215,7 @@ func TestStatsRecorded(t *testing.T) {
 		input_tokens, output_tokens, total_tokens, cached_tokens
 		FROM requests LIMIT 1`)
 	var (
-		cModel, upURL, upModel string
+		cModel, upURL, upModel                                        string
 		stream, cStatus, upStatus, inTok, outTok, totalTok, cachedTok int
 	)
 	if err := row.Scan(&cModel, &upURL, &upModel, &stream, &cStatus, &upStatus,
@@ -243,7 +261,7 @@ func TestStatsUpstreamError(t *testing.T) {
 	}
 	defer st.Close()
 
-	srv := New(config.Config{UpstreamBaseURL: up.URL}, st)
+	srv := New(convertRoute(up.URL, ""), st)
 	defer srv.Close()
 
 	body := `{"model":"m","input":"hi"}`

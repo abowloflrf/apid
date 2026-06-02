@@ -1,4 +1,5 @@
-// Package server 提供对外的 Responses API HTTP 服务。
+// Package server 提供对外的 HTTP 服务：按配置的多条路由分派，
+// 同协议纯转发、异协议做协议转换，全程采集请求指标。
 package server
 
 import (
@@ -6,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/abowloflrf/apid/internal/config"
@@ -17,21 +19,55 @@ import (
 	"github.com/abowloflrf/apid/internal/upstream"
 )
 
-type Server struct {
-	cfg      config.Config
-	upstream *upstream.Client
-	tracer   *trace.Tracer
-	recorder *stats.Recorder
+// route is a config entrypoint keyed by its exposed path.
+type route struct {
+	cfg config.Route
 }
 
-// New 构造一个 Server。st 可为 nil（不启用 stats），所有相关调用 nil-check 跳过。
+// target is a resolved upstream: its config plus a bound forwarding client,
+// shared across every route/model rule that references it.
+type target struct {
+	cfg    config.Upstream
+	client *upstream.Client
+}
+
+type Server struct {
+	routes    map[string]*route  // exposed path -> route
+	upstreams map[string]*target // upstream name -> target
+	tracer    *trace.Tracer
+	recorder  *stats.Recorder
+}
+
+// New builds a Server. st may be nil (stats disabled). Each upstream gets one
+// shared client; tracer/recorder are global.
 func New(cfg config.Config, st *store.Store) *Server {
-	return &Server{
-		cfg:      cfg,
-		upstream: upstream.New(cfg.UpstreamBaseURL, cfg.UpstreamAPIKey),
-		tracer:   trace.New(cfg.TraceDir),
-		recorder: stats.NewRecorder(st, 0),
+	upstreams := make(map[string]*target, len(cfg.Upstreams))
+	for _, uc := range cfg.Upstreams {
+		upstreams[uc.Name] = &target{
+			cfg:    uc,
+			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey),
+		}
 	}
+	routes := make(map[string]*route, len(cfg.Routes))
+	for _, rc := range cfg.Routes {
+		routes[rc.Path] = &route{cfg: rc}
+	}
+	return &Server{
+		routes:    routes,
+		upstreams: upstreams,
+		tracer:    trace.New(cfg.TraceDir),
+		recorder:  stats.NewRecorder(st, 0),
+	}
+}
+
+// resolve picks the target for a request's model on this route, or nil if no
+// rule matches.
+func (s *Server) resolve(rt *route, model string) *target {
+	name, ok := rt.cfg.UpstreamFor(model)
+	if !ok {
+		return nil
+	}
+	return s.upstreams[name]
 }
 
 // Close 释放 Recorder 的后台 worker；底层 *sql.DB 由 store 关闭。
@@ -42,10 +78,15 @@ func (s *Server) Close() {
 	s.recorder.Close()
 }
 
-// Handler 返回配置好路由的 http.Handler。
+// Handler 返回配置好路由的 http.Handler。每条路由注册到其暴露路径，
+// config 已保证路径唯一，ServeMux 不会冲突。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/responses", s.handleResponses)
+	for _, rt := range s.routes {
+		mux.HandleFunc("POST "+rt.cfg.Path, func(w http.ResponseWriter, r *http.Request) {
+			s.handleRoute(rt, w, r)
+		})
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -53,71 +94,93 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// handleResponses 处理 Responses API 请求：
-// 解析 -> 转换为 Chat 请求 -> 转发上游 -> 转换响应回 Responses 形式。
-func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+// handleRoute is the shared orchestration: read body, sniff model, resolve the
+// target upstream, trace, collect stats, then dispatch to convert or raw forward.
+func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rec := &respRecorder{ResponseWriter: w}
 
-	// 指标快照：起点信息先填好，defer 里再补全耗时与状态码后交给 Recorder。
-	// Recorder.Record 内部走有界 channel，热路径只一次 send、绝不阻塞。
 	stat := stats.Record{
-		Time:        start,
-		ClientPath:  r.URL.RequestURI(),
-		UpstreamURL: s.upstream.Endpoint(),
+		Time:           start,
+		ClientProtocol: string(rt.cfg.InputProtocol),
+		ClientPath:     r.URL.RequestURI(),
 	}
 	defer func() {
 		stat.Duration = time.Since(start)
 		stat.ClientStatus = rec.statusCode()
 		s.recorder.Record(stat)
 	}()
-
-	var req types.ResponsesRequest
-	upstreamStatus := 0
-	// 单条 access log：无论成功或失败都在请求结束时打印一行。
 	defer func() {
-		log.Printf("access method=%s path=%s model=%q stream=%t tools=%d upstream=%d status=%d duration=%s",
-			r.Method, r.URL.Path, req.Model, req.Stream, len(req.Tools),
-			upstreamStatus, rec.statusCode(), time.Since(start).Round(time.Millisecond))
+		log.Printf("access method=%s path=%s model=%q stream=%t upstream=%d status=%d duration=%s",
+			r.Method, r.URL.Path, stat.ClientModel, stat.Stream,
+			stat.UpstreamStatus, rec.statusCode(), time.Since(start).Round(time.Millisecond))
 	}()
 
-	// 读取原始请求体：既用于 TRACE 落盘，也用于后续解析。
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		stat.Error = "read request body: " + err.Error()
 		writeError(rec, http.StatusBadRequest, "failed to read request body: "+err.Error())
 		return
 	}
-	// 同一请求落盘多份：先存原始 Responses 请求，转换后再存对应的 Chat 请求。
+
+	// model is the routing key; both protocols carry it at the top level.
+	var sniff reqSniff
+	_ = json.Unmarshal(bodyBytes, &sniff)
+	stat.ClientModel = sniff.Model
+	stat.Stream = sniff.Stream
+
+	tg := s.resolve(rt, sniff.Model)
+	if tg == nil {
+		stat.Error = "no upstream for model " + sniff.Model
+		writeError(rec, http.StatusBadRequest, "no upstream configured for model "+strconv.Quote(sniff.Model))
+		return
+	}
+	stat.UpstreamProtocol = string(tg.cfg.Protocol)
+	stat.UpstreamURL = tg.client.Endpoint()
+	stat.UpstreamModel = sniff.Model
+	if tg.cfg.Model != "" {
+		stat.UpstreamModel = tg.cfg.Model
+	}
+
 	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
-	if path := traceEntry.Dump("responses", bodyBytes); path != "" {
+	if path := traceEntry.Dump(string(rt.cfg.InputProtocol), bodyBytes); path != "" {
 		log.Printf("trace request -> %s", path)
 	}
 
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		stat.Error = "parse request body: " + err.Error()
-		writeError(rec, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+	// Same protocol on both ends => raw forward; otherwise convert.
+	if rt.cfg.InputProtocol == tg.cfg.Protocol {
+		s.forwardRaw(tg, rec, r, bodyBytes, traceEntry, &stat, start)
 		return
 	}
-	stat.ClientModel = req.Model
-	stat.Stream = req.Stream
+	s.convertResponsesToChat(tg, rec, r, bodyBytes, traceEntry, &stat, start)
+}
 
-	// namespaces：把响应里 MCP 工具的 function_call 从上游扁平名拆回本地名 +
-	// namespace，否则 Codex 等客户端按 {name, namespace} 精确匹配会失败(unsupported call)。
+// convertResponsesToChat handles a responses -> chat route: parse Responses ->
+// convert to Chat -> forward -> stream/non-stream response conversion.
+func (s *Server) convertResponsesToChat(tg *target, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
+	var req types.ResponsesRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		stat.Error = "parse request body: " + err.Error()
+		writeError(w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+		return
+	}
+
+	// namespaces splits MCP tool function_call names back from the upstream's
+	// flat name into local name + namespace, so clients matching on
+	// {name, namespace} (e.g. Codex) don't reject as unsupported.
 	chatReq, namespaces, err := convert.ResponsesToChat(&req)
 	if err != nil {
 		stat.Error = "convert request: " + err.Error()
-		writeError(rec, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// 配置了上游实际模型名时，覆盖客户端请求里的 model。
-	if s.cfg.UpstreamModel != "" {
-		chatReq.Model = s.cfg.UpstreamModel
+	if tg.cfg.Model != "" {
+		chatReq.Model = tg.cfg.Model
 	}
 	stat.UpstreamModel = chatReq.Model
 
-	// 落盘转换后的 Chat 请求（即实际转发给上游的 body），与上面的 responses 配对。
+	// 落盘转换后的 Chat 请求（即实际转发给上游的 body），与上面的请求配对。
 	if traceEntry != nil {
 		if chatBytes, err := json.Marshal(chatReq); err != nil {
 			log.Printf("trace: failed to marshal chat request: %v", err)
@@ -126,32 +189,26 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, err := s.upstream.ChatCompletions(r.Context(), chatReq, r.Header.Get("Authorization"))
+	resp, err := tg.client.ChatCompletions(r.Context(), chatReq, r.Header.Get("Authorization"))
 	if err != nil {
 		stat.Error = "upstream: " + err.Error()
-		writeError(rec, http.StatusBadGateway, err.Error())
+		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
-	upstreamStatus = resp.StatusCode
 	stat.UpstreamStatus = resp.StatusCode
 
 	// 上游返回非 2xx 时，打印错误日志并原样把错误体回传给客户端。
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errBody, _ := io.ReadAll(resp.Body)
-		log.Printf("upstream error status=%d body=%s", resp.StatusCode, errBody)
-		stat.Error = truncate(string(errBody), 512)
-		rec.Header().Set("Content-Type", "application/json")
-		rec.WriteHeader(resp.StatusCode)
-		_, _ = rec.Write(errBody)
+		passUpstreamError(w, resp, stat)
 		return
 	}
 
 	if req.Stream {
-		s.streamResponse(rec, resp.Body, req.Model, namespaces, &stat, start)
+		s.streamResponse(w, resp.Body, req.Model, namespaces, stat, start)
 		return
 	}
-	s.jsonResponse(rec, resp.Body, namespaces, &stat)
+	s.jsonResponse(w, resp.Body, namespaces, stat)
 }
 
 // jsonResponse 处理非流式：解析上游 Chat 响应并转成 Responses 响应，并把
@@ -201,6 +258,22 @@ func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model str
 			stat.TTFT = result.FirstTokenAt.Sub(start)
 		}
 	}
+}
+
+// passUpstreamError forwards an upstream non-2xx error body verbatim and records
+// it. The upstream Content-Type is preserved (so pure-forward stays byte-faithful),
+// falling back to JSON only when the upstream sent none.
+func passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
+	errBody, _ := io.ReadAll(resp.Body)
+	log.Printf("upstream error status=%d body=%s", resp.StatusCode, errBody)
+	stat.Error = truncate(string(errBody), 512)
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(errBody)
 }
 
 // toStatsUsage 把上游 ChatUsage 映射到 stats.Usage。nil 入参返回 nil，

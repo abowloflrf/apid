@@ -15,31 +15,31 @@ import (
 
 // 默认 channel 容量与批大小。可在 NewRecorder 时覆盖 buffer。
 const (
-	defaultBuffer       = 1024
-	batchSize           = 64
-	flushInterval       = 500 * time.Millisecond
-	protocolClient      = "openai_responses"
-	protocolUpstream    = "openai_chat_completions"
+	defaultBuffer = 1024
+	batchSize     = 64
+	flushInterval = 500 * time.Millisecond
 )
 
 // Record 是单条请求的指标快照。
 // 业务方按需填充字段后调用 Recorder.Record；失败请求 Usage 字段保持 nil，
 // Error 字段填原因。
 type Record struct {
-	Time         time.Time
-	Duration     time.Duration
-	ClientPath   string
-	ClientModel  string
-	ClientStatus int
-	Stream       bool
+	Time           time.Time
+	Duration       time.Duration
+	ClientProtocol string
+	ClientPath     string
+	ClientModel    string
+	ClientStatus   int
+	Stream         bool
 
 	// TTFT 是首 token 耗时，仅流式请求且收到至少一个内容增量时为正；
 	// 非流式 / 失败 / 无内容时为 0，落盘写 NULL（表示"未测量"）。
 	TTFT time.Duration
 
-	UpstreamURL    string
-	UpstreamModel  string
-	UpstreamStatus int
+	UpstreamProtocol string
+	UpstreamURL      string
+	UpstreamModel    string
+	UpstreamStatus   int
 
 	Usage *Usage
 	Error string
@@ -184,10 +184,10 @@ func writeBatch(db *sql.DB, records []Record) error {
 			rec.Time.UTC().Format(time.RFC3339Nano),
 			rec.Duration.Milliseconds(),
 			ttftMillis(rec.TTFT),
-			protocolClient,
+			rec.ClientProtocol,
 			rec.ClientPath,
 			rec.ClientModel,
-			protocolUpstream,
+			rec.UpstreamProtocol,
 			rec.UpstreamURL,
 			rec.UpstreamModel,
 			stream,
