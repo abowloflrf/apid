@@ -10,7 +10,7 @@ import (
 // writeTOML writes a TOML file in a temp dir and returns its path.
 func writeTOML(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "apid.toml")
+	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

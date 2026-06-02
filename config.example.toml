@@ -1,5 +1,5 @@
 # apid forwarding config example.
-# Copy to apid.toml (or point APID_CONFIG at it) and edit.
+# Copy to config.toml (or pass --config <path>) and edit.
 # Ops params (listen addr / SQLite / TRACE) stay in env vars; see CLAUDE.md.
 #
 # Two tables:

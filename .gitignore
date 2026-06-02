@@ -15,8 +15,8 @@
 *.db-wal
 *.db-shm
 
-# 本地转发配置（含上游地址 / Key），用 apid.example.toml 作为模板
-/apid.toml
+# 本地转发配置（含上游地址 / Key），用 config.example.toml 作为模板
+/config.toml
 
 # 本地环境变量
 .env

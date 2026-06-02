@@ -108,9 +108,9 @@ type fileConfig struct {
 }
 
 // Load reads ops params from env and upstreams/routes from the TOML file at
-// APID_CONFIG (default "apid.toml"). A .env is loaded first without overriding
-// real env vars.
-func Load() (Config, error) {
+// configPath (the path comes from the --config flag). A .env is loaded first
+// without overriding real env vars.
+func Load(configPath string) (Config, error) {
 	envFile := os.Getenv("APID_ENV_FILE")
 	if envFile == "" {
 		envFile = ".env"
@@ -122,7 +122,7 @@ func Load() (Config, error) {
 		traceDir = "./logs"
 	}
 
-	upstreams, routes, err := loadFile(env("APID_CONFIG", "apid.toml"))
+	upstreams, routes, err := loadFile(configPath)
 	if err != nil {
 		return Config{}, err
 	}
@@ -139,7 +139,7 @@ func Load() (Config, error) {
 func loadFile(path string) ([]Upstream, []Route, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config: read %q failed (set APID_CONFIG): %w", path, err)
+		return nil, nil, fmt.Errorf("config: read %q failed (set --config): %w", path, err)
 	}
 	var fc fileConfig
 	md, err := toml.Decode(string(data), &fc)

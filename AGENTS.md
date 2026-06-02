@@ -35,8 +35,8 @@ go run .                                          # 启动服务
 
 运行时配置分两部分：**转发配置走 TOML 文件**，**运维参数走环境变量**。
 
-**转发配置（TOML）**：路径由 `APID_CONFIG` 指定（默认 `apid.toml`），是必需配置，
-缺失或非法即启动失败。见 `apid.example.toml`。两张表：
+**转发配置（TOML）**：路径由命令行 flag `--config` 指定（默认 `config.toml`），是必需
+配置，缺失或非法即启动失败。见 `config.example.toml`。两张表：
 
 `[[upstream]]`（后端，定义一次按 `name` 复用）字段：
 - `name`：引用键，必须唯一、非空。
@@ -55,7 +55,6 @@ go run .                                          # 启动服务
 **运维参数（环境变量，见 `internal/config`）**。启动时先加载工作目录下的 `.env`
 （可用 `APID_ENV_FILE` 指定其他路径），真实环境变量优先、不被 `.env` 覆盖：
 - `APID_LISTEN`（默认 `:8080`）
-- `APID_CONFIG`（TOML 路由文件路径，默认 `apid.toml`）
 - `APID_TRACE_DIR` / `APID_TRACE`：开启 TRACE 落盘。显式指定 `APID_TRACE_DIR` 优先；
   否则 `APID_TRACE` 为真（`1`/`true`/`yes`/`on`）时落到 `./logs`。默认关闭、零开销。
 - `APID_DB`：项目通用 SQLite 数据库文件路径（空 = 不启用）。开启后 stats 会在
@@ -66,9 +65,9 @@ go run .                                          # 启动服务
 
 按路由分派是入口、协议转换是核心，分层、各司其职：
 
-- **`internal/config`** — 运维参数从环境变量读，转发配置从 TOML 文件读（`APID_CONFIG`）。
-  两个结构：`Upstream`（name/protocol/base+path+key+model）与 `Route`（path/input_protocol/
-  `[]ModelRule{match, upstream}`）。`Load() (Config, error)`：`loadFile` 用 `BurntSushi/toml`
+- **`internal/config`** — 运维参数从环境变量读，转发配置从 TOML 文件读（路径由 `main.go`
+  的 `--config` flag 传入）。两个结构：`Upstream`（name/protocol/base+path+key+model）与
+  `Route`（path/input_protocol/`[]ModelRule{match, upstream}`）。`Load(configPath) (Config, error)`：`loadFile` 用 `BurntSushi/toml`
   解析、`MetaData.Undecoded()` 拒未知键、`validateConfig` 校验（upstream name 唯一、协议
   枚举合法、地址完整；route path 唯一且以 `/` 开头、引用的 upstream 存在、精确 match 不重复、
   兜底至多一条、拒绝 `chat→responses`）。`Route.UpstreamFor(model)` 按「精确 > glob > 兜底」

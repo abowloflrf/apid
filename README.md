@@ -15,20 +15,20 @@ token 等指标）。后续计划支持更多协议转换、Coding Agent 配置�
 
 ## 运行
 
-转发路由配置在 TOML 文件里（默认 `apid.toml`，可用 `APID_CONFIG` 指定路径）。
+转发路由配置在 TOML 文件里（默认 `config.toml`，可用命令行 flag `--config` 指定路径）。
 先复制示例并按需修改：
 
 ```bash
-cp apid.example.toml apid.toml   # 编辑里面的上游地址 / 协议 / Key / 模型
+cp config.example.toml config.toml   # 编辑里面的上游地址 / 协议 / Key / 模型
 
-export APID_LISTEN=":19092"      # 监听地址，默认 :8080（运维参数仍走环境变量）
-go run .
+export APID_LISTEN=":19092"        # 监听地址，默认 :8080（运维参数仍走环境变量）
+go run . --config config.toml      # --config 省略时默认 config.toml
 ```
 
 配置分两张表：`[[upstream]]` 定义后端（协议 / 地址 / Key / 模型），定义一次按 `name` 复用；
 `[[route]]` 是对外入口（`path` + `input_protocol`），按请求里的 `model` 匹配（精确 > glob >
 兜底）引用某个 upstream。入口协议与所选 upstream 协议相等时纯转发，否则协议转换。
-详见 `apid.example.toml`。
+详见 `config.example.toml`。
 
 ## 调用
 
