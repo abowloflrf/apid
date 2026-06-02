@@ -114,6 +114,7 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 		Time:           start,
 		ClientProtocol: string(rt.cfg.InputProtocol),
 		ClientPath:     r.URL.RequestURI(),
+		ClientUA:       r.UserAgent(),
 	}
 	defer func() {
 		stat.Duration = time.Since(start)

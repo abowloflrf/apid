@@ -29,6 +29,7 @@ type Record struct {
 	ClientProtocol string
 	ClientPath     string
 	ClientModel    string
+	ClientUA       string
 	ClientStatus   int
 	Stream         bool
 
@@ -143,12 +144,12 @@ func (r *Recorder) run() {
 
 const insertSQL = `INSERT INTO requests (
 	time, duration_ms, ttft_ms,
-	client_protocol, client_path, client_model,
+	client_protocol, client_path, client_model, client_ua,
 	upstream_protocol, upstream_url, upstream_model,
 	stream, client_status, upstream_status,
 	input_tokens, output_tokens, total_tokens, cached_tokens,
 	error
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // writeBatch 在一个事务里批量 INSERT 所有记录。
 func writeBatch(db *sql.DB, records []Record) error {
@@ -187,6 +188,7 @@ func writeBatch(db *sql.DB, records []Record) error {
 			rec.ClientProtocol,
 			rec.ClientPath,
 			rec.ClientModel,
+			rec.ClientUA,
 			rec.UpstreamProtocol,
 			rec.UpstreamURL,
 			rec.UpstreamModel,

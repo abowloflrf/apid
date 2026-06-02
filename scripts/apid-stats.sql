@@ -28,7 +28,8 @@ SELECT time, ttft_ms, upstream_model,
        printf('%,d', input_tokens) AS input_tokens,
        printf('%,d', output_tokens) AS output_tokens,
        ROUND(100.0 * cached_tokens / NULLIF(input_tokens, 0), 1) AS cache_pct,
-       ROUND(1000.0 * output_tokens / NULLIF(duration_ms - ttft_ms, 0), 1) AS tok_per_sec
+       ROUND(1000.0 * output_tokens / NULLIF(duration_ms - ttft_ms, 0), 1) AS tok_per_sec,
+       client_ua
 FROM requests
 ORDER BY time DESC
 LIMIT 20;

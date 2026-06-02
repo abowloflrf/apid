@@ -35,7 +35,8 @@ SELECT time, ttft_ms, upstream_model,
        format('{:,}', input_tokens)  AS input_tokens,
        format('{:,}', output_tokens) AS output_tokens,
        round(100.0 * cached_tokens / nullif(input_tokens, 0), 1)          AS cache_pct,
-       round(1000.0 * output_tokens / nullif(duration_ms - ttft_ms, 0), 1) AS tok_per_sec
+       round(1000.0 * output_tokens / nullif(duration_ms - ttft_ms, 0), 1) AS tok_per_sec,
+       client_ua
 FROM requests
 ORDER BY time DESC
 LIMIT 20;

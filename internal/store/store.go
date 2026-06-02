@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS requests (
     client_protocol   TEXT    NOT NULL,
     client_path       TEXT    NOT NULL,
     client_model      TEXT    NOT NULL,
+    client_ua         TEXT    NOT NULL DEFAULT '',
     upstream_protocol TEXT    NOT NULL,
     upstream_url      TEXT    NOT NULL,
     upstream_model    TEXT    NOT NULL,
