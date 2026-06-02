@@ -93,6 +93,31 @@ func TestUpstreamFor(t *testing.T) {
 	}
 }
 
+// TestResolveModelOverride checks Resolve returns the matched rule, carrying its
+// per-rule Model override (nil / "" / value are distinct).
+func TestResolveModelOverride(t *testing.T) {
+	rewrite := "deepseek-reasoner"
+	passthrough := ""
+	r := Route{Models: []ModelRule{
+		{Match: "gpt-4o", Upstream: "ds", Model: &rewrite},
+		{Match: "keep-*", Upstream: "ds", Model: &passthrough},
+		{Match: "*", Upstream: "ds"}, // nil = inherit upstream
+	}}
+
+	m, ok := r.Resolve("gpt-4o")
+	if !ok || m.Model == nil || *m.Model != rewrite {
+		t.Errorf("Resolve(gpt-4o) model = %v; want %q", m.Model, rewrite)
+	}
+	m, ok = r.Resolve("keep-this")
+	if !ok || m.Model == nil || *m.Model != "" {
+		t.Errorf("Resolve(keep-this) model = %v; want explicit empty", m.Model)
+	}
+	m, ok = r.Resolve("other")
+	if !ok || m.Model != nil {
+		t.Errorf("Resolve(other) model = %v; want nil (inherit)", m.Model)
+	}
+}
+
 func TestGlobMatch(t *testing.T) {
 	cases := []struct {
 		pattern, s string

@@ -60,14 +60,24 @@ func New(cfg config.Config, st *store.Store) *Server {
 	}
 }
 
-// resolve picks the target for a request's model on this route, or nil if no
-// rule matches.
-func (s *Server) resolve(rt *route, model string) *target {
-	name, ok := rt.cfg.UpstreamFor(model)
+// resolve picks the target and matched rule for a request's model on this
+// route, returning nil target if no rule matches.
+func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
+	rule, ok := rt.cfg.Resolve(model)
 	if !ok {
-		return nil
+		return nil, config.ModelRule{}
 	}
-	return s.upstreams[name]
+	return s.upstreams[rule.Upstream], rule
+}
+
+// effectiveModel returns the model to forward: the rule's override (incl. ""
+// for explicit pass-through) wins over the upstream default; an empty result
+// means pass the client's model through unchanged.
+func effectiveModel(rule config.ModelRule, up config.Upstream) string {
+	if rule.Model != nil {
+		return *rule.Model
+	}
+	return up.Model
 }
 
 // Close 释放 Recorder 的后台 worker；底层 *sql.DB 由 store 关闭。
@@ -129,17 +139,18 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 	stat.ClientModel = sniff.Model
 	stat.Stream = sniff.Stream
 
-	tg := s.resolve(rt, sniff.Model)
+	tg, rule := s.resolve(rt, sniff.Model)
 	if tg == nil {
 		stat.Error = "no upstream for model " + sniff.Model
 		writeError(rec, http.StatusBadRequest, "no upstream configured for model "+strconv.Quote(sniff.Model))
 		return
 	}
+	effModel := effectiveModel(rule, tg.cfg)
 	stat.UpstreamProtocol = string(tg.cfg.Protocol)
 	stat.UpstreamURL = tg.client.Endpoint()
 	stat.UpstreamModel = sniff.Model
-	if tg.cfg.Model != "" {
-		stat.UpstreamModel = tg.cfg.Model
+	if effModel != "" {
+		stat.UpstreamModel = effModel
 	}
 
 	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
@@ -149,15 +160,15 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 
 	// Same protocol on both ends => raw forward; otherwise convert.
 	if rt.cfg.InputProtocol == tg.cfg.Protocol {
-		s.forwardRaw(tg, rec, r, bodyBytes, traceEntry, &stat, start)
+		s.forwardRaw(tg, effModel, rec, r, bodyBytes, traceEntry, &stat, start)
 		return
 	}
-	s.convertResponsesToChat(tg, rec, r, bodyBytes, traceEntry, &stat, start)
+	s.convertResponsesToChat(tg, effModel, rec, r, bodyBytes, traceEntry, &stat, start)
 }
 
 // convertResponsesToChat handles a responses -> chat route: parse Responses ->
 // convert to Chat -> forward -> stream/non-stream response conversion.
-func (s *Server) convertResponsesToChat(tg *target, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
+func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
 	var req types.ResponsesRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		stat.Error = "parse request body: " + err.Error()
@@ -175,8 +186,8 @@ func (s *Server) convertResponsesToChat(tg *target, w http.ResponseWriter, r *ht
 		return
 	}
 
-	if tg.cfg.Model != "" {
-		chatReq.Model = tg.cfg.Model
+	if effModel != "" {
+		chatReq.Model = effModel
 	}
 	stat.UpstreamModel = chatReq.Model
 

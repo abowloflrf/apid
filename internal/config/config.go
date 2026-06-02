@@ -43,10 +43,15 @@ type Upstream struct {
 }
 
 // ModelRule dispatches a route by model. Match is an exact name, a glob
-// ("claude-*"), or "" / "*" as the catch-all.
+// ("claude-*"), or "" / "*" as the catch-all. Model overrides the forwarded
+// model id for this rule: nil (key omitted) inherits the upstream's model;
+// a non-nil value wins, where "" forces passing the client's model through and
+// a non-empty value rewrites it. This lets rules sharing one upstream pick
+// different rewrite strategies.
 type ModelRule struct {
-	Match    string `toml:"match"`
-	Upstream string `toml:"upstream"`
+	Match    string  `toml:"match"`
+	Upstream string  `toml:"upstream"`
+	Model    *string `toml:"model"`
 }
 
 // Route is a public entrypoint: a unique Path and the client-side InputProtocol.
@@ -58,23 +63,31 @@ type Route struct {
 	Models        []ModelRule `toml:"model"`
 }
 
-// UpstreamFor picks the upstream name for a model: exact > glob > catch-all.
+// Resolve picks the matching model rule for a model: exact > glob > catch-all.
 // Among multiple matching globs the first in config order wins.
-func (r Route) UpstreamFor(model string) (string, bool) {
+func (r Route) Resolve(model string) (ModelRule, bool) {
 	for _, m := range r.Models { // exact
 		if m.Match != "" && !isWildcard(m.Match) && m.Match == model {
-			return m.Upstream, true
+			return m, true
 		}
 	}
 	for _, m := range r.Models { // glob
 		if m.Match != "*" && isWildcard(m.Match) && globMatch(m.Match, model) {
-			return m.Upstream, true
+			return m, true
 		}
 	}
 	for _, m := range r.Models { // catch-all
 		if m.Match == "" || m.Match == "*" {
-			return m.Upstream, true
+			return m, true
 		}
+	}
+	return ModelRule{}, false
+}
+
+// UpstreamFor picks the upstream name for a model via Resolve.
+func (r Route) UpstreamFor(model string) (string, bool) {
+	if m, ok := r.Resolve(model); ok {
+		return m.Upstream, true
 	}
 	return "", false
 }

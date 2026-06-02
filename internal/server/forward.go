@@ -22,12 +22,12 @@ type reqSniff struct {
 }
 
 // forwardRaw handles a same-protocol route: forward the body verbatim, only
-// rewriting model when the upstream configures one. stat.ClientModel/Stream are
+// rewriting model when effModel is non-empty. stat.ClientModel/Stream are
 // already filled by handleRoute.
-func (s *Server) forwardRaw(tg *target, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
+func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
 	fwdBody := bodyBytes
-	if tg.cfg.Model != "" {
-		b, err := overrideModel(bodyBytes, tg.cfg.Model)
+	if effModel != "" {
+		b, err := overrideModel(bodyBytes, effModel)
 		if err != nil {
 			stat.Error = "override model: " + err.Error()
 			writeError(w, http.StatusBadRequest, "failed to parse request body: "+err.Error())

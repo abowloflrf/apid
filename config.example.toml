@@ -35,10 +35,18 @@ input_protocol = "openai_responses"
   [[route.model]]
   match = "deepseek-*"     # exact name or glob
   upstream = "deepseek"    # convert (responses -> chat) since protocols differ
+  # model omitted => inherit upstream.model ("deepseek-chat")
+
+  [[route.model]]
+  match = "gpt-4o"         # rewrite this incoming model for the same upstream
+  upstream = "deepseek"
+  model = "deepseek-reasoner"  # per-rule override beats upstream.model
 
   [[route.model]]
   match = "*"              # empty or "*" = catch-all (at most one)
   upstream = "openai"
+  model = ""               # "" = force pass-through the client's model
+                           # (omit the key instead to inherit upstream.model)
 
 # ── Chat entrypoint: same upstreams reused, no duplication of backend info. ──
 [[route]]

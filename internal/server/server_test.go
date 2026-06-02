@@ -136,6 +136,91 @@ func TestUpstreamModelOverride(t *testing.T) {
 	}
 }
 
+// TestEffectiveModel checks rule override precedence over the upstream default.
+func TestEffectiveModel(t *testing.T) {
+	rewrite := "rule-model"
+	empty := ""
+	up := config.Upstream{Model: "upstream-model"}
+	cases := []struct {
+		name string
+		rule config.ModelRule
+		want string
+	}{
+		{"rule rewrite wins", config.ModelRule{Model: &rewrite}, "rule-model"},
+		{"rule empty forces passthrough", config.ModelRule{Model: &empty}, ""},
+		{"nil inherits upstream", config.ModelRule{}, "upstream-model"},
+	}
+	for _, tc := range cases {
+		if got := effectiveModel(tc.rule, up); got != tc.want {
+			t.Errorf("%s: effectiveModel = %q; want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestRuleModelOverride 验证 [[route.model]] 上的 model 覆盖了 upstream 的默认 model。
+func TestRuleModelOverride(t *testing.T) {
+	var gotModel string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotModel = req.Model
+		_ = json.NewEncoder(w).Encode(types.ChatResponse{
+			ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
+			Choices: []types.ChatChoice{{Message: types.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+		})
+	}))
+	defer up.Close()
+
+	ruleModel := "rule-level-model"
+	cfg := convertRoute(up.URL, "upstream-default")
+	cfg.Routes[0].Models[0].Model = &ruleModel // rule override should win
+	h := New(cfg, nil).Handler()
+
+	body := `{"model":"gpt-x","input":"你好"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if gotModel != ruleModel {
+		t.Errorf("上游收到的 model = %q, 期望 %q", gotModel, ruleModel)
+	}
+}
+
+// TestRuleModelPassthrough 验证 rule model 为空串时，即便 upstream 配了默认，也透传客户端 model。
+func TestRuleModelPassthrough(t *testing.T) {
+	var gotModel string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req types.ChatRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotModel = req.Model
+		_ = json.NewEncoder(w).Encode(types.ChatResponse{
+			ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
+			Choices: []types.ChatChoice{{Message: types.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+		})
+	}))
+	defer up.Close()
+
+	passthrough := ""
+	cfg := convertRoute(up.URL, "upstream-default")
+	cfg.Routes[0].Models[0].Model = &passthrough // explicit passthrough beats upstream default
+	h := New(cfg, nil).Handler()
+
+	body := `{"model":"gpt-x","input":"你好"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if gotModel != "gpt-x" {
+		t.Errorf("上游收到的 model = %q, 期望透传 gpt-x", gotModel)
+	}
+}
+
 func TestStreaming(t *testing.T) {
 	up := mockUpstream(t, true)
 	defer up.Close()

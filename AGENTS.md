@@ -43,13 +43,17 @@ go run .                                          # 启动服务
 - `protocol`：该后端实际说的协议（枚举两值）。
 - `base_url` + `path`：上游实际地址（显式配 path，不按协议推导）。
 - `api_key`：留空则透传客户端 `Authorization` 头。
-- `model`：非空则覆盖转发的 `model`（纯转发也生效，会解析改写 body）；留空透传。
+- `model`：该后端的默认 model 改写，非空则覆盖转发的 `model`（纯转发也生效，会解析
+  改写 body）；留空透传。可被引用它的 `[[route.model]]` 规则按需覆盖（见下）。
 
 `[[route]]`（入口）字段：
 - `path`：对外暴露路径，也是路由键，必须唯一、以 `/` 开头。
 - `input_protocol`：客户端在这个入口说的协议（枚举两值）。
 - `[[route.model]]`：至少一条按 model 的分派规则，`match`（精确名 / glob `claude-*` /
-  空或 `*` 兜底，兜底至多一条）+ `upstream`（引用 `Upstream.name`）。匹配优先级
+  空或 `*` 兜底，兜底至多一条）+ `upstream`（引用 `Upstream.name`）+ 可选 `model`
+  （本规则的 model 改写，**三态指针**：键省略 = 继承 upstream `model`；`""` = 强制透传
+  客户端 model；非空 = 改写成该值）。生效优先级：规则 `model` > upstream `model` > 透传。
+  这样同一 upstream 被多条规则复用时，每条规则可各自决定透传 / 改写。匹配优先级
   精确 > glob > 兜底。是否转换 = `input_protocol` 与所选 upstream `protocol` 是否相等。
 
 **运维参数（环境变量，见 `internal/config`）**。启动时先加载工作目录下的 `.env`
@@ -67,11 +71,13 @@ go run .                                          # 启动服务
 
 - **`internal/config`** — 运维参数从环境变量读，转发配置从 TOML 文件读（路径由 `main.go`
   的 `--config` flag 传入）。两个结构：`Upstream`（name/protocol/base+path+key+model）与
-  `Route`（path/input_protocol/`[]ModelRule{match, upstream}`）。`Load(configPath) (Config, error)`：`loadFile` 用 `BurntSushi/toml`
+  `Route`（path/input_protocol/`[]ModelRule{match, upstream, model}`，`model` 是 `*string`
+  三态：nil 继承 upstream / `""` 透传 / 非空改写）。`Load(configPath) (Config, error)`：`loadFile` 用 `BurntSushi/toml`
   解析、`MetaData.Undecoded()` 拒未知键、`validateConfig` 校验（upstream name 唯一、协议
   枚举合法、地址完整；route path 唯一且以 `/` 开头、引用的 upstream 存在、精确 match 不重复、
-  兜底至多一条、拒绝 `chat→responses`）。`Route.UpstreamFor(model)` 按「精确 > glob > 兜底」
-  选 upstream name，glob 用不把 `/` 当分隔符的 `globMatch`。新增协议 / 字段都改这一处。
+  兜底至多一条、拒绝 `chat→responses`）。`Route.Resolve(model)` 按「精确 > glob > 兜底」
+  选中命中的 `ModelRule`，`UpstreamFor` 是其取 `upstream` 字段的薄封装；glob 用不把 `/`
+  当分隔符的 `globMatch`。新增协议 / 字段都改这一处。
 - **`internal/types`** — 两套数据结构并存：`responses.go`(对外) 与 `chat.go`(对上游)。
   联合类型字段(`input` / `tool_choice` / `content` / `output`)统一用 `json.RawMessage`
   延迟解析，因为同一字段在协议里既可能是字符串也可能是数组/对象。
@@ -109,12 +115,13 @@ go run .                                          # 启动服务
 - **`internal/server`** — 两级分派（path → model）。`New` 为每个 upstream 建一个
   `upstream.Client` 包成 `target`（含 upstream 配置）存进 `map[name]*target`，route 存进
   `map[path]*route`；`Handler` 把每条 route 注册到其暴露 path。`handleRoute` 是共用编排
-  骨架：读 body → sniff model → `resolve`（`route.UpstreamFor` 选 name，再查 `target`，
-  无命中回 400）→ 填 trace/`stats.Record`（defer 一次性上报），再按「`input_protocol` 与
-  所选 `target.cfg.Protocol` 是否相等」分派：
-  - 转换 `convertResponsesToChat`（`server.go`）：解析 Responses → 转 Chat（按 `target` 模型
+  骨架：读 body → sniff model → `resolve`（`route.Resolve` 选中 `ModelRule`，再查 `target`，
+  无命中回 400）→ `effectiveModel(rule, upstream)` 算出生效转发 model（规则 `model` >
+  upstream `model` > 透传）→ 填 trace/`stats.Record`（defer 一次性上报），再按「`input_protocol`
+  与所选 `target.cfg.Protocol` 是否相等」分派（两条路径都收 `effModel` 参数）：
+  - 转换 `convertResponsesToChat`（`server.go`）：解析 Responses → 转 Chat（按 `effModel`
     覆盖）→ 转发 → 按 `stream` 走 `streamResponse`/`jsonResponse`（复用 `convert` 包）。
-  - 纯转发 `forwardRaw`（`forward.go`）：可选改写 model，`Forward` 原始字节；非流式
+  - 纯转发 `forwardRaw`（`forward.go`）：`effModel` 非空则改写 model，`Forward` 原始字节；非流式
     `forwardJSON` 整体回传并按 upstream 协议 `extractUsage`；流式 `forwardStream` 调
     `forwardSSE`（`sseforward.go`）逐行原样透传 + tee 解析 usage/TTFT。
   两条路径都用 `passUpstreamError` 把上游非 2xx 错误体原样回传。
