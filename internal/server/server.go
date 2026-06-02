@@ -121,9 +121,10 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 		s.recorder.Record(stat)
 	}()
 	defer func() {
-		log.Printf("access method=%s path=%s model=%q stream=%t upstream=%d status=%d duration=%s",
+		log.Printf("access method=%s path=%s model=%q stream=%t upstream_url=%q upstream_model=%q upstream_status=%d status=%d duration=%s",
 			r.Method, r.URL.Path, stat.ClientModel, stat.Stream,
-			stat.UpstreamStatus, rec.statusCode(), time.Since(start).Round(time.Millisecond))
+			stat.UpstreamURL, stat.UpstreamModel, stat.UpstreamStatus,
+			rec.statusCode(), time.Since(start).Round(time.Millisecond))
 	}()
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -200,7 +201,7 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 		}
 	}
 
-	resp, err := tg.client.ChatCompletions(r.Context(), chatReq, r.Header.Get("Authorization"))
+	resp, err := tg.client.ChatCompletions(r.Context(), chatReq, r.Header)
 	if err != nil {
 		stat.Error = "upstream: " + err.Error()
 		writeError(w, http.StatusBadGateway, err.Error())

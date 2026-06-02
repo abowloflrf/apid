@@ -41,7 +41,7 @@ func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, 
 		}
 	}
 
-	resp, err := tg.client.Forward(r.Context(), fwdBody, r.Header.Get("Authorization"))
+	resp, err := tg.client.Forward(r.Context(), fwdBody, r.Header)
 	if err != nil {
 		stat.Error = "upstream: " + err.Error()
 		writeError(w, http.StatusBadGateway, err.Error())
