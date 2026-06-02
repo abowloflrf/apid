@@ -141,7 +141,7 @@ func Load(configPath string) (Config, error) {
 	}
 
 	return Config{
-		Listen:    env("APID_LISTEN", ":8080"),
+		Listen:    env("APID_LISTEN", ":19092"),
 		TraceDir:  traceDir,
 		DB:        env("APID_DB", ""),
 		Upstreams: upstreams,

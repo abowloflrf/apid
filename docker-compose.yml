@@ -1,0 +1,27 @@
+services:
+  apid:
+    build:
+      context: .
+      # Build with host networking so `go mod download` reuses the host's
+      # network/DNS/proxy (proxy.golang.org is otherwise unreachable here).
+      network: host
+    image: apid:latest
+    container_name: apid
+    restart: unless-stopped
+    # Run as the host user so the bind-mounted ./data is writable (the image's
+    # default non-root uid 10001 wouldn't own the host dir).
+    user: "1000:1000"
+    # Host network: APID_LISTEN port (default :19092) is exposed directly on the host.
+    network_mode: host
+    environment:
+      # Listen address; with host networking this binds straight to the host.
+      APID_LISTEN: ":19092"
+      # Collect token/perf metrics into SQLite. Persisted via the volume below.
+      APID_DB: "/app/data/apid.db"
+      # Trace dumping stays off by default (zero overhead). To enable, set
+      # APID_TRACE_DIR: "/app/logs" and add a ./logs:/app/logs volume below.
+    volumes:
+      # Your live config, mounted read-only.
+      - ./config.toml:/app/config.toml:ro
+      # Persist the metrics DB across container restarts.
+      - ./data:/app/data

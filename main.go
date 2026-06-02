@@ -37,7 +37,7 @@ Forwarding config (a TOML file at --config, default ./config.toml; missing file 
   See config.example.toml in the repo for a full example.
 
 Ops params (environment variables; ./.env is loaded first, real env vars take precedence):
-  APID_LISTEN     listen address (default :8080)
+  APID_LISTEN     listen address (default :19092)
   APID_ENV_FILE   path to the .env file (default .env)
   APID_TRACE_DIR  directory for TRACE dumps; takes precedence when set
   APID_TRACE      when truthy (1/true/yes/on), dump TRACE to ./logs (default off)

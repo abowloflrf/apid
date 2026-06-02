@@ -1,0 +1,40 @@
+[Unit]
+Description=apid - LLM API gateway
+Documentation=https://github.com/abowloflrf/apid
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/apid --config /etc/apid/config.toml
+
+# Ops params via env; the file is optional (leading "-").
+EnvironmentFile=-/etc/apid/apid.env
+
+# Run as a transient unprivileged user; StateDirectory gives it a writable
+# /var/lib/apid owned by that user for the SQLite DB (APID_DB).
+DynamicUser=yes
+StateDirectory=apid
+WorkingDirectory=/etc/apid
+
+Restart=on-failure
+RestartSec=2s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
