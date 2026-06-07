@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +19,16 @@ import (
 // the first-token time. Parsing failures are swallowed (never affect forwarding),
 // but a non-EOF read error or a client write error is returned so stats can flag
 // a truncated stream. Returns end-of-stream usage and first content-delta time.
-func forwardSSE(dst sseSink, src io.Reader, proto config.Protocol) (*stats.Usage, time.Time, error) {
+func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Protocol) (*stats.Usage, time.Time, error) {
 	reader := bufio.NewReader(src)
 	var usage *stats.Usage
 	var firstTokenAt time.Time
 
 	for {
+		// Client gone (disconnect / shutdown): stop reading upstream.
+		if err := ctx.Err(); err != nil {
+			return usage, firstTokenAt, err
+		}
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			if _, werr := dst.Write(line); werr != nil {

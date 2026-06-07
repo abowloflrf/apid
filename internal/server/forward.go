@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,7 +57,7 @@ func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, 
 	}
 
 	if stat.Stream {
-		s.forwardStream(tg, w, resp, stat, start)
+		s.forwardStream(r.Context(), tg, w, resp, stat, start)
 		return
 	}
 	forwardJSON(tg, w, resp, stat)
@@ -79,7 +80,7 @@ func forwardJSON(tg *target, w http.ResponseWriter, resp *http.Response, stat *s
 }
 
 // forwardStream forwards an SSE response verbatim, tee-parsing usage and TTFT.
-func (s *Server) forwardStream(tg *target, w http.ResponseWriter, resp *http.Response, stat *stats.Record, start time.Time) {
+func (s *Server) forwardStream(ctx context.Context, tg *target, w http.ResponseWriter, resp *http.Response, stat *stats.Record, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		stat.Error = "streaming not supported"
@@ -91,7 +92,7 @@ func (s *Server) forwardStream(tg *target, w http.ResponseWriter, resp *http.Res
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(resp.StatusCode)
 
-	usage, firstAt, err := forwardSSE(&sseWriter{w: w, f: flusher}, resp.Body, tg.cfg.Protocol)
+	usage, firstAt, err := forwardSSE(ctx, &sseWriter{w: w, f: flusher}, resp.Body, tg.cfg.Protocol)
 	if err != nil {
 		log.Printf("sse forward error: %v", err)
 		stat.Error = "sse forward: " + err.Error()

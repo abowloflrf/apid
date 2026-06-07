@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -218,7 +219,7 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 	}
 
 	if req.Stream {
-		s.streamResponse(w, resp.Body, req.Model, namespaces, stat, start)
+		s.streamResponse(r.Context(), w, resp.Body, req.Model, namespaces, stat, start)
 		return
 	}
 	s.jsonResponse(w, resp.Body, namespaces, stat)
@@ -245,7 +246,7 @@ func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces 
 // streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流。
 // 流末的 usage、首 token 时刻通过 result 带回到 stat，由 defer 落盘。
 // start 是整条请求的起点，用于把首 token 时刻换算成 TTFT(客户端视角的端到端首字节)。
-func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record, start time.Time) {
+func (s *Server) streamResponse(ctx context.Context, w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		stat.Error = "streaming not supported"
@@ -258,7 +259,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, body io.Reader, model str
 	w.WriteHeader(http.StatusOK)
 
 	sw := &sseWriter{w: w, f: flusher}
-	result, err := convert.StreamChatToResponses(sw, body, model, namespaces)
+	result, err := convert.StreamChatToResponses(ctx, sw, body, model, namespaces)
 	if err != nil {
 		log.Printf("stream conversion error: %v", err)
 		stat.Error = "stream conversion: " + err.Error()

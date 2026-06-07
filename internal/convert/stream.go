@@ -2,6 +2,7 @@ package convert
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,7 +42,7 @@ type StreamResult struct {
 //	response.completed
 // namespaces 是「扁平工具名 -> (命名空间, 本地名)」映射(见 ToolNamespaces)，用于把
 // MCP 工具的 function_call 事件从上游扁平名拆回本地名 + namespace；无命名空间工具传 nil。
-func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) (*StreamResult, error) {
+func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) (*StreamResult, error) {
 	st := &streamState{w: w, model: model, tools: map[int]*toolState{}, namespaces: namespaces}
 
 	emit(w, "response.created", map[string]any{
@@ -55,6 +56,10 @@ func StreamChatToResponses(w SSEWriter, body io.Reader, model string, namespaces
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
+		// Client gone (disconnect / shutdown): stop converting and reading upstream.
+		if err := ctx.Err(); err != nil {
+			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
+		}
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data:") {
 			continue

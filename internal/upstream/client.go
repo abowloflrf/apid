@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/abowloflrf/apid/internal/types"
 )
@@ -27,7 +29,28 @@ func New(baseURL, path, apiKey string) *Client {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		path:    ensureLeadingSlash(path),
 		apiKey:  apiKey,
-		http:    &http.Client{},
+		http:    &http.Client{Transport: newTransport()},
+	}
+}
+
+// newTransport builds a Transport with fine-grained timeouts that bound only
+// connection setup and the wait for response headers (i.e. TTFT). It must NOT
+// cap the overall request, so long-running streaming (SSE) responses can stay
+// open for many minutes. That is also why we never set http.Client.Timeout.
+func newTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 120 * time.Second, // allow slow-TTFT reasoning models
+		ExpectContinueTimeout: 1 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		ForceAttemptHTTP2:     true,
 	}
 }
 
