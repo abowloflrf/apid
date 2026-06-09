@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
@@ -37,6 +38,7 @@ type Server struct {
 	upstreams map[string]*target // upstream name -> target
 	tracer    *trace.Tracer
 	recorder  *stats.Recorder
+	db        *sql.DB // read-only handle for the stats query API; nil when storage is off
 }
 
 // New builds a Server. st may be nil (stats disabled). Each upstream gets one
@@ -53,11 +55,16 @@ func New(cfg config.Config, st *store.Store) *Server {
 	for _, rc := range cfg.Routes {
 		routes[rc.Path] = &route{cfg: rc}
 	}
+	var db *sql.DB
+	if st.Enabled() {
+		db = st.DB()
+	}
 	return &Server{
 		routes:    routes,
 		upstreams: upstreams,
 		tracer:    trace.New(cfg.TraceDir),
 		recorder:  stats.NewRecorder(st, 0),
+		db:        db,
 	}
 }
 
@@ -102,6 +109,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /stats/daily", s.handleStatsDaily)
 	return mux
 }
 
