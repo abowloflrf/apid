@@ -3,6 +3,8 @@ package convert
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -540,6 +542,123 @@ func TestStreamNamespaceRestored(t *testing.T) {
 	}
 	if !strings.Contains(out, `"name":"tavily_search"`) {
 		t.Errorf("function_call name 应拆回本地名 tavily_search, 输出:\n%s", out)
+	}
+}
+
+func TestStreamResultUsageAndTTFT(t *testing.T) {
+	// StreamResult carries the end-of-stream usage and the first-token time;
+	// both feed the stats pipeline (billing + TTFT), so they must survive the
+	// conversion. The usage chunk has empty choices, as sent by upstreams
+	// honoring stream_options.include_usage.
+	raw := "data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
+		"data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: " + `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6}}}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	result, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage == nil {
+		t.Fatal("StreamResult.Usage should carry the final usage chunk")
+	}
+	u := result.Usage
+	if u.PromptTokens != 10 || u.CompletionTokens != 4 || u.TotalTokens != 14 {
+		t.Errorf("usage = %+v, want prompt=10 completion=4 total=14", u)
+	}
+	if u.PromptTokensDetails == nil || u.PromptTokensDetails.CachedTokens != 6 {
+		t.Errorf("cached tokens not preserved: %+v", u.PromptTokensDetails)
+	}
+	if result.FirstTokenAt.IsZero() {
+		t.Error("FirstTokenAt should be set by the first content delta")
+	}
+	// response.completed must expose usage to the client, cached_tokens included.
+	out := s.b.String()
+	for _, want := range []string{`"input_tokens":10`, `"output_tokens":4`, `"total_tokens":14`, `"cached_tokens":6`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("response.completed missing %s, output:\n%s", want, out)
+		}
+	}
+}
+
+func TestStreamResultNoContent(t *testing.T) {
+	// A stream with no content deltas (only finish_reason) and no usage chunk:
+	// FirstTokenAt must stay zero so callers don't record a bogus TTFT,
+	// and Usage must stay nil so stats writes zeros instead of garbage.
+	raw := "data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	result, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.FirstTokenAt.IsZero() {
+		t.Error("FirstTokenAt should stay zero when the stream has no content delta")
+	}
+	if result.Usage != nil {
+		t.Errorf("Usage should stay nil without a usage chunk, got %+v", result.Usage)
+	}
+}
+
+// chunkReader yields one chunk per Read call, invoking onRead first so a test
+// can cancel a context at a precise point mid-stream.
+type chunkReader struct {
+	chunks []string
+	i      int
+	onRead func(i int)
+}
+
+func (c *chunkReader) Read(p []byte) (int, error) {
+	if c.i >= len(c.chunks) {
+		return 0, io.EOF
+	}
+	if c.onRead != nil {
+		c.onRead(c.i)
+	}
+	n := copy(p, c.chunks[c.i])
+	c.i++
+	return n, nil
+}
+
+func TestStreamClientDisconnect(t *testing.T) {
+	// Client gone mid-stream (ctx canceled): the converter must stop instead of
+	// draining the upstream, return the context error, keep partial state
+	// (FirstTokenAt) in the result, and not emit a closing completed/failed
+	// event to the already-disconnected client.
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &chunkReader{
+		chunks: []string{
+			"data: " + `{"choices":[{"delta":{"content":"first"}}]}` + "\n\n",
+			"data: " + `{"choices":[{"delta":{"content":"second"}}]}` + "\n\n",
+		},
+		onRead: func(i int) {
+			if i == 1 {
+				cancel()
+			}
+		},
+	}
+	var s sink
+	result, err := StreamChatToResponses(ctx, &s, r, "m", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if result == nil {
+		t.Fatal("result should be non-nil on disconnect")
+	}
+	if result.FirstTokenAt.IsZero() {
+		t.Error("FirstTokenAt from before the disconnect should be preserved")
+	}
+	out := s.b.String()
+	if !strings.Contains(out, `"delta":"first"`) {
+		t.Errorf("delta before disconnect should have been emitted, output:\n%s", out)
+	}
+	if strings.Contains(out, `"delta":"second"`) {
+		t.Errorf("delta after disconnect should not be processed, output:\n%s", out)
+	}
+	for _, ev := range []string{"response.completed", "response.failed"} {
+		if strings.Contains(out, "event: "+ev) {
+			t.Errorf("should not emit %s after disconnect, output:\n%s", ev, out)
+		}
 	}
 }
 
