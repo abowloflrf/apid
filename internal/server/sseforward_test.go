@@ -56,3 +56,23 @@ func TestParseResponsesSSE(t *testing.T) {
 		}
 	})
 }
+
+func TestParseAnthropicSSEUsage(t *testing.T) {
+	var usage *stats.Usage
+	var first time.Time
+
+	parseAnthropicSSE(`{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2,"output_tokens":0}}}`, &usage, &first)
+	parseAnthropicSSE(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`, &usage, &first)
+	parseAnthropicSSE(`{"type":"message_delta","usage":{"output_tokens":3}}`, &usage, &first)
+
+	if usage == nil {
+		t.Fatal("usage not parsed from Anthropic stream")
+	}
+	if usage.InputTokens != 8 || usage.OutputTokens != 3 || usage.TotalTokens != 11 ||
+		usage.CachedTokens != 2 || usage.CacheCreationTokens != 1 {
+		t.Errorf("usage = %+v, want input=8 output=3 total=11 cache_read=2 cache_creation=1", usage)
+	}
+	if first.IsZero() {
+		t.Error("content_block_delta should set first-token time")
+	}
+}

@@ -75,6 +75,13 @@ func upstreamOptions(proto config.Protocol) []upstream.Option {
 	return nil
 }
 
+func usageLogFields(u *stats.Usage) (present bool, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens int) {
+	if u == nil {
+		return false, 0, 0, 0, 0, 0
+	}
+	return true, u.InputTokens, u.OutputTokens, u.TotalTokens, u.CachedTokens, u.CacheCreationTokens
+}
+
 // resolve picks the target and matched rule for a request's model on this
 // route, returning nil target if no rule matches.
 func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
@@ -138,10 +145,12 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 		s.recorder.Record(stat)
 	}()
 	defer func() {
-		log.Printf("access method=%s path=%s model=%q stream=%t upstream_url=%q upstream_model=%q upstream_status=%d status=%d duration=%s",
+		usagePresent, inputTok, outputTok, totalTok, cacheReadTok, cacheCreateTok := usageLogFields(stat.Usage)
+		log.Printf("access method=%s path=%s model=%q stream=%t upstream_url=%q upstream_model=%q upstream_status=%d status=%d duration=%s usage_present=%t usage_input_tokens=%d usage_output_tokens=%d usage_total_tokens=%d usage_cache_read_tokens=%d usage_cache_creation_tokens=%d",
 			r.Method, r.URL.Path, stat.ClientModel, stat.Stream,
 			stat.UpstreamURL, stat.UpstreamModel, stat.UpstreamStatus,
-			rec.statusCode(), time.Since(start).Round(time.Millisecond))
+			rec.statusCode(), time.Since(start).Round(time.Millisecond),
+			usagePresent, inputTok, outputTok, totalTok, cacheReadTok, cacheCreateTok)
 	}()
 
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -166,6 +175,9 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 	effModel := effectiveModel(rule, tg.cfg)
 	stat.UpstreamProtocol = string(tg.cfg.Protocol)
 	stat.UpstreamURL = tg.client.Endpoint()
+	if rt.cfg.InputProtocol == tg.cfg.Protocol {
+		stat.UpstreamURL = tg.client.EndpointWithQuery(r.URL.RawQuery)
+	}
 	stat.UpstreamModel = sniff.Model
 	if effModel != "" {
 		stat.UpstreamModel = effModel

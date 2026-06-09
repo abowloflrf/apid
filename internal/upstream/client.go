@@ -83,12 +83,27 @@ func (c *Client) Endpoint() string {
 	return c.baseURL + c.path
 }
 
+// EndpointWithQuery returns Endpoint plus the original client query string.
+func (c *Client) EndpointWithQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return c.Endpoint()
+	}
+	return c.Endpoint() + "?" + rawQuery
+}
+
 // Forward POSTs the raw body bytes to Endpoint().
 // Client headers are passed through except auth/transport/CDN ones (see
 // skipForwardHeader). For auth the configured apiKey wins; if empty, the
 // client's Authorization is forwarded. Caller closes resp.Body.
 func (c *Client) Forward(ctx context.Context, body []byte, clientHeader http.Header) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint(), bytes.NewReader(body))
+	return c.ForwardWithQuery(ctx, body, clientHeader, "")
+}
+
+// ForwardWithQuery is Forward plus the client's raw URL query. Pure forwarding
+// must preserve query parameters because some upstream-compatible APIs use them
+// as feature switches.
+func (c *Client) ForwardWithQuery(ctx context.Context, body []byte, clientHeader http.Header, rawQuery string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.EndpointWithQuery(rawQuery), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

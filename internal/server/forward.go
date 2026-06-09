@@ -42,7 +42,7 @@ func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, 
 		}
 	}
 
-	resp, err := tg.client.Forward(r.Context(), fwdBody, r.Header)
+	resp, err := tg.client.ForwardWithQuery(r.Context(), fwdBody, r.Header, r.URL.RawQuery)
 	if err != nil {
 		stat.Error = "upstream: " + err.Error()
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -176,10 +176,11 @@ func anthropicUsageToStats(u *types.AnthropicUsage) *stats.Usage {
 	}
 	input := u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 	return &stats.Usage{
-		InputTokens:  input,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  input + u.OutputTokens,
-		CachedTokens: u.CacheReadInputTokens,
+		InputTokens:         input,
+		OutputTokens:        u.OutputTokens,
+		TotalTokens:         input + u.OutputTokens,
+		CachedTokens:        u.CacheReadInputTokens,
+		CacheCreationTokens: u.CacheCreationInputTokens,
 	}
 }
 

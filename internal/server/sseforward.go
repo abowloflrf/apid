@@ -153,5 +153,8 @@ func mergeAnthropicUsage(dst **stats.Usage, src *types.AnthropicUsage) {
 	if next.CachedTokens > 0 {
 		(*dst).CachedTokens = next.CachedTokens
 	}
+	if next.CacheCreationTokens > 0 {
+		(*dst).CacheCreationTokens = next.CacheCreationTokens
+	}
 	(*dst).TotalTokens = (*dst).InputTokens + (*dst).OutputTokens
 }

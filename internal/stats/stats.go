@@ -48,10 +48,11 @@ type Record struct {
 
 // Usage 是从上游 usage 字段抽取的 token 指标。
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
-	CachedTokens int
+	InputTokens         int
+	OutputTokens        int
+	TotalTokens         int
+	CachedTokens        int
+	CacheCreationTokens int
 }
 
 // Recorder 异步收集请求指标并写入 store。零值不可用；用 NewRecorder 创建。

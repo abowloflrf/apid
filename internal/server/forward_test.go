@@ -184,6 +184,41 @@ func TestForwardAnthropicMessagesNonStream(t *testing.T) {
 	}
 }
 
+func TestForwardRawPreservesQuery(t *testing.T) {
+	var gotRawQuery string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer up.Close()
+
+	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
+	defer st.Close()
+	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st)
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true&x=1",
+		strings.NewReader(`{"model":"claude-sonnet","messages":[]}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if gotRawQuery != "beta=true&x=1" {
+		t.Errorf("上游 query = %q, want beta=true&x=1", gotRawQuery)
+	}
+	var upURL string
+	if err := st.DB().QueryRow(`SELECT upstream_url FROM requests LIMIT 1`).Scan(&upURL); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(upURL, "/v1/messages?beta=true&x=1") {
+		t.Errorf("upstream_url = %q, want query preserved", upURL)
+	}
+}
+
 // TestForwardChatStream：chat->chat 纯转发流式，断言 SSE 原样 + usage + TTFT>0 + stream=1。
 func TestForwardChatStream(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
