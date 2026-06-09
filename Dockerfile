@@ -1,5 +1,7 @@
 # ---- build stage ----
-FROM golang:1.26 AS build
+# Run on the builder's native arch and cross-compile, so multi-platform
+# builds never compile Go under QEMU emulation.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 WORKDIR /src
 
 # Cache modules first
@@ -8,10 +10,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 # Build static binary (CGO off: store uses pure-Go sqlite if applicable)
+ARG TARGETOS TARGETARCH
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/apid .
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/apid .
 
 # ---- runtime stage ----
 FROM alpine:3
