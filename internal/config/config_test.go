@@ -66,6 +66,54 @@ input_protocol = "openai_chat_completions"
 	}
 }
 
+func TestLoadFileValidAnthropicMessages(t *testing.T) {
+	path := writeTOML(t, `
+[[upstream]]
+name = "anthropic"
+protocol = "anthropic_messages"
+base_url = "https://api.anthropic.com"
+path = "/v1/messages"
+api_key = "sk-ant-xxx"
+
+[[route]]
+path = "/v1/messages"
+input_protocol = "anthropic_messages"
+  [[route.model]]
+  match = "claude-*"
+  upstream = "anthropic"
+`)
+	ups, routes, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("loadFile failed: %v", err)
+	}
+	if ups[0].Protocol != ProtoAnthropic || routes[0].InputProtocol != ProtoAnthropic {
+		t.Errorf("protocol not loaded as anthropic: upstream=%q route=%q", ups[0].Protocol, routes[0].InputProtocol)
+	}
+}
+
+func TestLoadFileRejectsAnthropicConversion(t *testing.T) {
+	path := writeTOML(t, `
+[[upstream]]
+name = "anthropic"
+protocol = "anthropic_messages"
+base_url = "https://api.anthropic.com"
+path = "/v1/messages"
+
+[[route]]
+path = "/v1/responses"
+input_protocol = "openai_responses"
+  [[route.model]]
+  upstream = "anthropic"
+`)
+	_, _, err := loadFile(path)
+	if err == nil {
+		t.Fatal("expected unsupported conversion error, got success")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error = %q, want not supported", err.Error())
+	}
+}
+
 // TestUpstreamFor checks match priority: exact > glob > catch-all.
 func TestUpstreamFor(t *testing.T) {
 	r := Route{Models: []ModelRule{

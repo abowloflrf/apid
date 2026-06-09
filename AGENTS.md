@@ -11,10 +11,11 @@
 
 - **协议转换**(两端协议不同):当前仅实现对外 **Responses** → 上游 **Chat Completions**
   (请求转 Chat 转发、响应转回 Responses)。反向 `chat → responses` 在配置加载时报错拒绝。
-- **纯转发**(两端协议相同,chat→chat / responses→responses 均可):原样转发字节,
-  仅 sniff/解析采集 model/stream/token/TTFT 指标(upstream 配了 `model` 才改写 body)。
+- **纯转发**(两端协议相同,chat→chat / responses→responses / anthropic→anthropic 均可):
+  原样转发字节,仅 sniff/解析采集 model/stream/token/TTFT 指标(upstream 配了 `model`
+  才改写 body)。
 
-枚举协议:`openai_responses`、`openai_chat_completions`。
+枚举协议:`openai_responses`、`openai_chat_completions`、`anthropic_messages`。
 
 ## 常用命令
 
@@ -33,6 +34,8 @@ go run .                                          # 启动服务
 的 struct 注释,这里只记约定:
 
 - `[[upstream]].model`:非空覆盖转发 model(纯转发也生效),留空透传。
+- `protocol = "anthropic_messages"` 当前只支持同协议纯转发;配置的 `api_key` 会作为
+  `X-Api-Key` 发给上游。
 - `[[route.model]]`:至少一条 `{match, upstream, model}` 规则。`match` 精确名 / glob
   `claude-*` / 空或 `*` 兜底(至多一条)。`model` 是**三态指针**:键省略 = 继承 upstream;
   `""` = 强制透传客户端 model;非空 = 改写。生效优先级:规则 `model` > upstream `model` > 透传。
@@ -44,7 +47,7 @@ go run .                                          # 启动服务
 分层、各司其职,逐包细节见各文件 doc comment:
 
 - **`internal/config`** — 两张表的加载/校验/`Resolve`(精确>glob>兜底)。**新增协议或配置字段改这里。**
-- **`internal/types`** — 两套结构并存:`responses.go`(对外)/`chat.go`(对上游);联合类型字段用 `json.RawMessage` 延迟解析。
+- **`internal/types`** — 多协议结构并存:`responses.go`、`chat.go`、`anthropic.go`;联合类型字段用 `json.RawMessage` 延迟解析。
 - **`internal/convert`** — Responses⇄Chat 三方向转换:`request.go`/`response.go`/`stream.go`(有状态累加器)。**扩展字段映射改这里 + 补 `convert_test.go`。**
 - **`internal/upstream`** — 每个 upstream 一个 `Client`(绑定 baseURL+path+apiKey),`Forward` 转发原始字节,`ChatCompletions` 是其薄封装。
 - **`internal/trace`** — 可选 TRACE 落盘,配对离线 DEBUG;配套 `trace-viewer.html`。禁用时零开销。

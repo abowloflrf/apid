@@ -21,6 +21,7 @@ type Protocol string
 const (
 	ProtoResponses Protocol = "openai_responses"
 	ProtoChat      Protocol = "openai_chat_completions"
+	ProtoAnthropic Protocol = "anthropic_messages"
 )
 
 type Config struct {
@@ -226,8 +227,9 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 			if !ok {
 				return fmt.Errorf("config: route %q references undefined upstream %q", r.Path, m.Upstream)
 			}
-			// Reverse conversion (chat -> responses) is not implemented.
-			if r.InputProtocol == ProtoChat && u.Protocol == ProtoResponses {
+			// Only responses -> chat conversion is implemented. All other
+			// cross-protocol pairs, including Anthropic, are rejected at load.
+			if r.InputProtocol != u.Protocol && !(r.InputProtocol == ProtoResponses && u.Protocol == ProtoChat) {
 				return fmt.Errorf("config: route %q via upstream %q: protocol %s -> %s not supported",
 					r.Path, u.Name, r.InputProtocol, u.Protocol)
 			}
@@ -249,7 +251,7 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 }
 
 func isValidProtocol(p Protocol) bool {
-	return p == ProtoResponses || p == ProtoChat
+	return p == ProtoResponses || p == ProtoChat || p == ProtoAnthropic
 }
 
 func env(key, def string) string {

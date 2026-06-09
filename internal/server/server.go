@@ -48,7 +48,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 	for _, uc := range cfg.Upstreams {
 		upstreams[uc.Name] = &target{
 			cfg:    uc,
-			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey),
+			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey, upstreamOptions(uc.Protocol)...),
 		}
 	}
 	routes := make(map[string]*route, len(cfg.Routes))
@@ -66,6 +66,13 @@ func New(cfg config.Config, st *store.Store) *Server {
 		recorder:  stats.NewRecorder(st, 0),
 		db:        db,
 	}
+}
+
+func upstreamOptions(proto config.Protocol) []upstream.Option {
+	if proto == config.ProtoAnthropic {
+		return []upstream.Option{upstream.WithXAPIKeyAuth()}
+	}
+	return nil
 }
 
 // resolve picks the target and matched rule for a request's model on this

@@ -1,5 +1,5 @@
-// Command apid 是一个常驻的 LLM API 协议转换服务：
-// 对外提供 OpenAI Responses API，对内转发给远程 Chat Completions 服务。
+// Command apid 是一个常驻的 LLM API 网关：
+// 支持同协议纯转发，并在需要时执行已实现的协议转换。
 package main
 
 import (
@@ -34,6 +34,7 @@ Usage:
 Forwarding config (a TOML file at --config, default ./config.toml; missing file = startup failure):
   [[upstream]]  a backend, reused by name: name / protocol / base_url / path / api_key / model
   [[route]]     an entrypoint, dispatched by request model: path / input_protocol / [[route.model]]{match, upstream}
+  Protocols: openai_responses, openai_chat_completions, anthropic_messages.
   See config.example.toml in the repo for a full example.
 
 Ops params (environment variables; ./.env is loaded first, real env vars take precedence):

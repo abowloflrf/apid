@@ -68,6 +68,8 @@ func parseSSELine(line []byte, proto config.Protocol, usage **stats.Usage, first
 		parseChatSSE(data, usage, firstTokenAt)
 	case config.ProtoResponses:
 		parseResponsesSSE(data, usage, firstTokenAt)
+	case config.ProtoAnthropic:
+		parseAnthropicSSE(data, usage, firstTokenAt)
 	}
 }
 
@@ -112,4 +114,44 @@ func parseResponsesSSE(data string, usage **stats.Usage, firstTokenAt *time.Time
 	if firstTokenAt.IsZero() && strings.HasSuffix(ev.Type, ".delta") {
 		*firstTokenAt = time.Now()
 	}
+}
+
+func parseAnthropicSSE(data string, usage **stats.Usage, firstTokenAt *time.Time) {
+	var ev types.AnthropicStreamEvent
+	if json.Unmarshal([]byte(data), &ev) != nil {
+		return
+	}
+	if ev.Message.Usage != nil {
+		mergeAnthropicUsage(usage, ev.Message.Usage)
+	}
+	if ev.Usage != nil {
+		mergeAnthropicUsage(usage, ev.Usage)
+	}
+	if firstTokenAt.IsZero() && ev.Type == "content_block_delta" && (ev.Delta.Type != "" || ev.Delta.Text != "") {
+		*firstTokenAt = time.Now()
+	}
+}
+
+func mergeAnthropicUsage(dst **stats.Usage, src *types.AnthropicUsage) {
+	if src == nil {
+		return
+	}
+	next := anthropicUsageToStats(src)
+	if next == nil {
+		return
+	}
+	if *dst == nil {
+		*dst = next
+		return
+	}
+	if next.InputTokens > 0 {
+		(*dst).InputTokens = next.InputTokens
+	}
+	if next.OutputTokens > 0 {
+		(*dst).OutputTokens = next.OutputTokens
+	}
+	if next.CachedTokens > 0 {
+		(*dst).CachedTokens = next.CachedTokens
+	}
+	(*dst).TotalTokens = (*dst).InputTokens + (*dst).OutputTokens
 }

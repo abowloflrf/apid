@@ -10,7 +10,7 @@
 # Conversion happens when a route's input_protocol differs from the matched
 # upstream's protocol (currently only openai_responses -> openai_chat_completions).
 # Equal protocols = pure forward (bytes passed through, metrics still collected).
-# Protocols: openai_responses, openai_chat_completions.
+# Protocols: openai_responses, openai_chat_completions, anthropic_messages.
 
 # ── Upstreams: write each backend once, reuse from any entrypoint. ──
 [[upstream]]
@@ -26,6 +26,13 @@ name = "openai"
 protocol = "openai_chat_completions"
 base_url = "https://api.openai.com"
 path = "/v1/chat/completions"
+
+[[upstream]]
+name = "anthropic"
+protocol = "anthropic_messages"
+base_url = "https://api.anthropic.com"
+path = "/v1/messages"
+api_key = "sk-ant-xxx"   # sent as X-Api-Key for anthropic_messages
 
 # ── Responses entrypoint: clients speak Responses API, dispatched by model. ──
 [[route]]
@@ -55,3 +62,12 @@ input_protocol = "openai_chat_completions"
 
   [[route.model]]
   upstream = "openai"      # equal protocols => pure forward
+
+# ── Anthropic Messages entrypoint: pure forward only, no protocol conversion. ──
+[[route]]
+path = "/v1/messages"
+input_protocol = "anthropic_messages"
+
+  [[route.model]]
+  match = "claude-*"
+  upstream = "anthropic"   # equal protocols => pure forward

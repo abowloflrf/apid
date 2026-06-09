@@ -85,6 +85,60 @@ func TestForwardAuthFallback(t *testing.T) {
 	}
 }
 
+func TestForwardAnthropicXAPIKeyAuth(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "/v1/messages", "secret-key", WithXAPIKeyAuth())
+	in := http.Header{}
+	in.Set("Authorization", "Bearer client-tok")
+	in.Set("X-Api-Key", "client-key")
+	in.Set("Anthropic-Version", "2023-06-01")
+
+	resp, err := c.Forward(context.Background(), []byte(`{"model":"claude"}`), in)
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	resp.Body.Close()
+
+	if v := got.Get("X-Api-Key"); v != "secret-key" {
+		t.Errorf("X-Api-Key = %q, want configured key", v)
+	}
+	if v := got.Get("Authorization"); v != "" {
+		t.Errorf("Authorization = %q, want stripped for Anthropic configured key", v)
+	}
+	if v := got.Get("Anthropic-Version"); v != "2023-06-01" {
+		t.Errorf("Anthropic-Version = %q, want forwarded", v)
+	}
+}
+
+func TestForwardAnthropicXAPIKeyFallback(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Api-Key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "/v1/messages", "", WithXAPIKeyAuth())
+	in := http.Header{}
+	in.Set("X-Api-Key", "client-key")
+
+	resp, err := c.Forward(context.Background(), []byte(`{}`), in)
+	if err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	resp.Body.Close()
+
+	if got != "client-key" {
+		t.Errorf("X-Api-Key = %q, want client key passthrough", got)
+	}
+}
+
 // TestChatCompletions asserts the thin wrapper marshals the request and POSTs it
 // to Endpoint() with the configured auth, and surfaces the upstream response.
 func TestChatCompletions(t *testing.T) {

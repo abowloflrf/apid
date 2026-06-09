@@ -140,6 +140,13 @@ func extractUsage(proto config.Protocol, body []byte) *stats.Usage {
 		if json.Unmarshal(body, &r) == nil {
 			return responseUsageToStats(r.Usage)
 		}
+	case config.ProtoAnthropic:
+		var r struct {
+			Usage *types.AnthropicUsage `json:"usage"`
+		}
+		if json.Unmarshal(body, &r) == nil {
+			return anthropicUsageToStats(r.Usage)
+		}
 	}
 	return nil
 }
@@ -158,6 +165,22 @@ func responseUsageToStats(u *types.ResponseUsage) *stats.Usage {
 		out.CachedTokens = u.InputTokensDetails.CachedTokens
 	}
 	return out
+}
+
+// anthropicUsageToStats maps Anthropic's split cache fields into the common
+// stats shape. InputTokens includes normal input, cache creation, and cache read
+// tokens so TotalTokens remains the full request size.
+func anthropicUsageToStats(u *types.AnthropicUsage) *stats.Usage {
+	if u == nil {
+		return nil
+	}
+	input := u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
+	return &stats.Usage{
+		InputTokens:  input,
+		OutputTokens: u.OutputTokens,
+		TotalTokens:  input + u.OutputTokens,
+		CachedTokens: u.CacheReadInputTokens,
+	}
 }
 
 // copyContentType 把上游响应的 Content-Type 透传给客户端（纯转发保真）。

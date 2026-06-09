@@ -128,6 +128,62 @@ func TestForwardResponsesNonStream(t *testing.T) {
 	}
 }
 
+func TestForwardAnthropicMessagesNonStream(t *testing.T) {
+	const upstreamBody = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":9,"cache_creation_input_tokens":2,"cache_read_input_tokens":4,"output_tokens":6}}`
+	var gotPath, gotBody, gotKey, gotVersion string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("X-Api-Key")
+		gotVersion = r.Header.Get("Anthropic-Version")
+		b, _ := readAll(r)
+		gotBody = b
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	defer up.Close()
+
+	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
+	defer st.Close()
+	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
+	cfg.Upstreams[0].APIKey = "sk-ant-test"
+	srv := New(cfg, st)
+	defer srv.Close()
+
+	reqBody := `{"model":"claude-sonnet","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(reqBody))
+	req.Header.Set("X-Api-Key", "client-key")
+	req.Header.Set("Anthropic-Version", "2023-06-01")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	if rec.Code != http.StatusOK || rec.Body.String() != upstreamBody {
+		t.Fatalf("响应不对: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/messages" || gotBody != reqBody {
+		t.Errorf("上游请求不对: path=%q body=%s", gotPath, gotBody)
+	}
+	if gotKey != "sk-ant-test" {
+		t.Errorf("X-Api-Key = %q, want configured key", gotKey)
+	}
+	if gotVersion != "2023-06-01" {
+		t.Errorf("Anthropic-Version = %q, want forwarded", gotVersion)
+	}
+
+	var cProto, upProto string
+	var inTok, outTok, totalTok, cachedTok int
+	if err := st.DB().QueryRow(`SELECT client_protocol, upstream_protocol, input_tokens, output_tokens, total_tokens, cached_tokens
+		FROM requests LIMIT 1`).Scan(&cProto, &upProto, &inTok, &outTok, &totalTok, &cachedTok); err != nil {
+		t.Fatal(err)
+	}
+	if cProto != "anthropic_messages" || upProto != "anthropic_messages" {
+		t.Errorf("protocol 错: client=%q upstream=%q", cProto, upProto)
+	}
+	if inTok != 15 || outTok != 6 || totalTok != 21 || cachedTok != 4 {
+		t.Errorf("token 错: in=%d out=%d total=%d cached=%d, want 15/6/21/4", inTok, outTok, totalTok, cachedTok)
+	}
+}
+
 // TestForwardChatStream：chat->chat 纯转发流式，断言 SSE 原样 + usage + TTFT>0 + stream=1。
 func TestForwardChatStream(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -177,6 +233,61 @@ func TestForwardChatStream(t *testing.T) {
 	}
 	if inTok != 2 || totalTok != 4 {
 		t.Errorf("usage 错: in=%d total=%d, want 2/4", inTok, totalTok)
+	}
+	if ttft == nil || *ttft < 0 {
+		t.Errorf("ttft_ms 应有非负值, got %v", ttft)
+	}
+}
+
+func TestForwardAnthropicMessagesStream(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		chunks := []string{
+			`event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":5,"cache_creation_input_tokens":1,"cache_read_input_tokens":2,"output_tokens":0}}}
+`,
+			`event: content_block_delta
+data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"he"}}
+`,
+			`event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":3}}
+`,
+		}
+		for _, c := range chunks {
+			_, _ = w.Write([]byte(c + "\n"))
+			fl.Flush()
+		}
+	}))
+	defer up.Close()
+
+	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
+	defer st.Close()
+	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st)
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	out := rec.Body.String()
+	if !strings.Contains(out, `event: content_block_delta`) || !strings.Contains(out, `"text":"he"`) {
+		t.Errorf("Anthropic SSE 未原样透传: %s", out)
+	}
+
+	var stream, inTok, outTok, totalTok, cachedTok int
+	var ttft *int
+	if err := st.DB().QueryRow(`SELECT stream, input_tokens, output_tokens, total_tokens, cached_tokens, ttft_ms
+		FROM requests LIMIT 1`).Scan(&stream, &inTok, &outTok, &totalTok, &cachedTok, &ttft); err != nil {
+		t.Fatal(err)
+	}
+	if stream != 1 {
+		t.Errorf("stream = %d, want 1", stream)
+	}
+	if inTok != 8 || outTok != 3 || totalTok != 11 || cachedTok != 2 {
+		t.Errorf("usage 错: in=%d out=%d total=%d cached=%d, want 8/3/11/2", inTok, outTok, totalTok, cachedTok)
 	}
 	if ttft == nil || *ttft < 0 {
 		t.Errorf("ttft_ms 应有非负值, got %v", ttft)

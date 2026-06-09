@@ -17,20 +17,43 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	path    string
-	apiKey  string
-	http    *http.Client
+	baseURL   string
+	path      string
+	apiKey    string
+	authStyle authStyle
+	http      *http.Client
+}
+
+type authStyle int
+
+const (
+	authBearer authStyle = iota
+	authXAPIKey
+)
+
+// Option adjusts Client behavior for protocol-specific forwarding details.
+type Option func(*Client)
+
+// WithXAPIKeyAuth makes configured api_key use Anthropic's X-Api-Key header.
+func WithXAPIKeyAuth() Option {
+	return func(c *Client) {
+		c.authStyle = authXAPIKey
+	}
 }
 
 // New 构造一个绑定到 baseURL+path 的上游客户端。
-func New(baseURL, path, apiKey string) *Client {
-	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		path:    ensureLeadingSlash(path),
-		apiKey:  apiKey,
-		http:    &http.Client{Transport: newTransport()},
+func New(baseURL, path, apiKey string, opts ...Option) *Client {
+	c := &Client{
+		baseURL:   strings.TrimRight(baseURL, "/"),
+		path:      ensureLeadingSlash(path),
+		apiKey:    apiKey,
+		authStyle: authBearer,
+		http:      &http.Client{Transport: newTransport()},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // newTransport builds a Transport with fine-grained timeouts that bound only
@@ -72,18 +95,36 @@ func (c *Client) Forward(ctx context.Context, body []byte, clientHeader http.Hea
 	copyForwardHeaders(httpReq.Header, clientHeader)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	switch {
-	case c.apiKey != "":
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	case clientHeader.Get("Authorization") != "":
-		httpReq.Header.Set("Authorization", clientHeader.Get("Authorization"))
-	}
+	c.applyAuth(httpReq.Header, clientHeader)
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("请求上游失败: %w", err)
 	}
 	return resp, nil
+}
+
+func (c *Client) applyAuth(dst, clientHeader http.Header) {
+	switch c.authStyle {
+	case authXAPIKey:
+		switch {
+		case c.apiKey != "":
+			dst.Set("X-Api-Key", c.apiKey)
+		case clientHeader.Get("X-Api-Key") != "":
+			dst.Set("X-Api-Key", clientHeader.Get("X-Api-Key"))
+		case clientHeader.Get("Api-Key") != "":
+			dst.Set("X-Api-Key", clientHeader.Get("Api-Key"))
+		case clientHeader.Get("Authorization") != "":
+			dst.Set("Authorization", clientHeader.Get("Authorization"))
+		}
+	default:
+		switch {
+		case c.apiKey != "":
+			dst.Set("Authorization", "Bearer "+c.apiKey)
+		case clientHeader.Get("Authorization") != "":
+			dst.Set("Authorization", clientHeader.Get("Authorization"))
+		}
+	}
 }
 
 // ChatCompletions 把转换后的 Chat 请求序列化后转发给上游。
