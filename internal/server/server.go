@@ -14,6 +14,7 @@ import (
 
 	"github.com/abowloflrf/apid/internal/config"
 	"github.com/abowloflrf/apid/internal/convert"
+	"github.com/abowloflrf/apid/internal/reasoning"
 	"github.com/abowloflrf/apid/internal/stats"
 	"github.com/abowloflrf/apid/internal/store"
 	"github.com/abowloflrf/apid/internal/trace"
@@ -34,11 +35,12 @@ type target struct {
 }
 
 type Server struct {
-	routes    map[string]*route  // exposed path -> route
-	upstreams map[string]*target // upstream name -> target
+	routes    map[string]*route
+	upstreams map[string]*target
 	tracer    *trace.Tracer
 	recorder  *stats.Recorder
-	db        *sql.DB // read-only handle for the stats query API; nil when storage is off
+	db        *sql.DB          // read-only handle for the stats query API; nil when storage is off
+	reasoning *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
 }
 
 // New builds a Server. st may be nil (stats disabled). Each upstream gets one
@@ -65,6 +67,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		tracer:    trace.New(cfg.TraceDir),
 		recorder:  stats.NewRecorder(st, 0),
 		db:        db,
+		reasoning: reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
 	}
 }
 
@@ -82,8 +85,6 @@ func usageLogFields(u *stats.Usage) (present bool, inputTokens, outputTokens, to
 	return true, u.InputTokens, u.OutputTokens, u.TotalTokens, u.CachedTokens, u.CacheCreationTokens
 }
 
-// resolve picks the target and matched rule for a request's model on this
-// route, returning nil target if no rule matches.
 func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
 	rule, ok := rt.cfg.Resolve(model)
 	if !ok {
@@ -92,9 +93,6 @@ func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
 	return s.upstreams[rule.Upstream], rule
 }
 
-// effectiveModel returns the model to forward: the rule's override (incl. ""
-// for explicit pass-through) wins over the upstream default; an empty result
-// means pass the client's model through unchanged.
 func effectiveModel(rule config.ModelRule, up config.Upstream) string {
 	if rule.Model != nil {
 		return *rule.Model
@@ -102,7 +100,6 @@ func effectiveModel(rule config.ModelRule, up config.Upstream) string {
 	return up.Model
 }
 
-// Close 释放 Recorder 的后台 worker；底层 *sql.DB 由 store 关闭。
 func (s *Server) Close() {
 	if s == nil {
 		return
@@ -110,8 +107,7 @@ func (s *Server) Close() {
 	s.recorder.Close()
 }
 
-// Handler 返回配置好路由的 http.Handler。每条路由注册到其暴露路径，
-// config 已保证路径唯一，ServeMux 不会冲突。
+// Handler 返回配置好路由的 http.Handler。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	for _, rt := range s.routes {
@@ -160,7 +156,6 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// model is the routing key; both protocols carry it at the top level.
 	var sniff reqSniff
 	_ = json.Unmarshal(bodyBytes, &sniff)
 	stat.ClientModel = sniff.Model
@@ -196,8 +191,7 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 	s.convertResponsesToChat(tg, effModel, rec, r, bodyBytes, traceEntry, &stat, start)
 }
 
-// convertResponsesToChat handles a responses -> chat route: parse Responses ->
-// convert to Chat -> forward -> stream/non-stream response conversion.
+// convertResponsesToChat handles a responses -> chat route.
 func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
 	var req types.ResponsesRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
@@ -206,22 +200,22 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 		return
 	}
 
-	// namespaces splits MCP tool function_call names back from the upstream's
-	// flat name into local name + namespace, so clients matching on
-	// {name, namespace} (e.g. Codex) don't reject as unsupported.
-	chatReq, namespaces, err := convert.ResponsesToChat(&req)
+	chatReq, namespaces, err := convert.ResponsesToChat(&req, s.reasoning)
 	if err != nil {
 		stat.Error = "convert request: " + err.Error()
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// 修正 system/developer 消息顺序：Codex 可能把 developer 插在
+	// function_call 与 function_call_output 之间，移到 messages[0]。
+	chatReq.Messages = convert.FixSystemOrdering(chatReq.Messages)
+
 	if effModel != "" {
 		chatReq.Model = effModel
 	}
 	stat.UpstreamModel = chatReq.Model
 
-	// 落盘转换后的 Chat 请求（即实际转发给上游的 body），与上面的请求配对。
 	if traceEntry != nil {
 		if chatBytes, err := json.Marshal(chatReq); err != nil {
 			log.Printf("trace: failed to marshal chat request: %v", err)
@@ -239,7 +233,6 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 	defer resp.Body.Close()
 	stat.UpstreamStatus = resp.StatusCode
 
-	// 上游返回非 2xx 时，打印错误日志并原样把错误体回传给客户端。
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		passUpstreamError(w, resp, stat)
 		return
@@ -252,8 +245,8 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 	s.jsonResponse(w, resp.Body, namespaces, stat)
 }
 
-// jsonResponse 处理非流式：解析上游 Chat 响应并转成 Responses 响应，并把
-// usage 填入 stat（成功路径由 defer 统一落盘）。
+// ---- 非流式 ----
+
 func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces map[string]convert.NamespacedTool, stat *stats.Record) {
 	var chatResp types.ChatResponse
 	if err := json.NewDecoder(body).Decode(&chatResp); err != nil {
@@ -264,15 +257,22 @@ func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces 
 	stat.Usage = toStatsUsage(chatResp.Usage)
 
 	out := convert.ChatToResponses(&chatResp, namespaces)
+
+	// 回写 reasoning 缓存，供下轮重放回填。
+	if len(chatResp.Choices) > 0 {
+		a := chatResp.Choices[0].Message
+		s.saveReasoning(toolCallIDs(a.ToolCalls), a.Content, a.ReasoningContent)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
 		log.Printf("failed to write response: %v", err)
 	}
 }
 
-// streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流。
-// 流末的 usage、首 token 时刻通过 result 带回到 stat，由 defer 落盘。
-// start 是整条请求的起点，用于把首 token 时刻换算成 TTFT(客户端视角的端到端首字节)。
+// ---- 流式 ----
+
+// streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流，完成后回写 reasoning 缓存。
 func (s *Server) streamResponse(ctx context.Context, w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -298,12 +298,39 @@ func (s *Server) streamResponse(ctx context.Context, w http.ResponseWriter, body
 		if !result.FirstTokenAt.IsZero() {
 			stat.TTFT = result.FirstTokenAt.Sub(start)
 		}
+		// 回写 reasoning 缓存，供下轮重放回填。
+		s.saveReasoning(result.ToolCallIDs, result.ContentText, result.ReasoningText)
 	}
 }
 
-// passUpstreamError forwards an upstream non-2xx error body verbatim and records
-// it. The upstream Content-Type is preserved (so pure-forward stays byte-faithful),
-// falling back to JSON only when the upstream sent none.
+// saveReasoning 把本轮 assistant 的 reasoning_content 写入缓存：按每个 tool
+// call_id、以及按 assistant 文本指纹各存一份，供下轮重放时回填。空值自动忽略。
+func (s *Server) saveReasoning(callIDs []string, content, reasoning string) {
+	if reasoning == "" {
+		return
+	}
+	for _, id := range callIDs {
+		s.reasoning.SaveCall(id, reasoning)
+	}
+	s.reasoning.SaveContent(content, reasoning)
+}
+
+// toolCallIDs 提取 assistant.tool_calls 里的 call_id 列表。
+func toolCallIDs(calls []types.ChatToolCall) []string {
+	if len(calls) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(calls))
+	for _, tc := range calls {
+		if tc.ID != "" {
+			ids = append(ids, tc.ID)
+		}
+	}
+	return ids
+}
+
+// ---- 通用辅助 ----
+
 func passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
 	errBody, _ := io.ReadAll(resp.Body)
 	log.Printf("upstream error status=%d body=%s", resp.StatusCode, errBody)
@@ -317,8 +344,6 @@ func passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.R
 	_, _ = w.Write(errBody)
 }
 
-// toStatsUsage 把上游 ChatUsage 映射到 stats.Usage。nil 入参返回 nil，
-// 调用方在失败时无需特殊处理，stat.Usage 保持 nil，stats 层会写 0。
 func toStatsUsage(u *types.ChatUsage) *stats.Usage {
 	if u == nil {
 		return nil
@@ -334,7 +359,6 @@ func toStatsUsage(u *types.ChatUsage) *stats.Usage {
 	return out
 }
 
-// truncate 截断超长字符串，避免上游错误体把 SQLite 撑爆。
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -343,7 +367,6 @@ func truncate(s string, n int) string {
 }
 
 // respRecorder 包装 http.ResponseWriter，记录最终写出的状态码用于 access log。
-// 同时透传 Flush，以兼容流式输出。
 type respRecorder struct {
 	http.ResponseWriter
 	status int
@@ -354,7 +377,6 @@ func (r *respRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
-// statusCode 返回实际状态码；未显式调用 WriteHeader 时按 200 处理。
 func (r *respRecorder) statusCode() int {
 	if r.status == 0 {
 		return http.StatusOK
@@ -368,7 +390,6 @@ func (r *respRecorder) Flush() {
 	}
 }
 
-// sseWriter 把 http.ResponseWriter + Flusher 适配为 convert.SSEWriter。
 type sseWriter struct {
 	w http.ResponseWriter
 	f http.Flusher

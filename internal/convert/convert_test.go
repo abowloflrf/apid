@@ -29,7 +29,7 @@ func TestRequestTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRequestToolParametersDefault(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestRequestToolChoiceObjectForms(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &req); err != nil {
 			t.Fatalf("input %s: %v", in, err)
 		}
-		chat, _, err := ResponsesToChat(&req)
+		chat, _, err := ResponsesToChat(&req, nil)
 		if err != nil {
 			t.Fatalf("input %s: %v", in, err)
 		}
@@ -110,7 +110,7 @@ func TestRequestParallelToolCalls(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestRequestParallelToolCalls(t *testing.T) {
 	body2 := `{"model":"m","input":"hi"}`
 	var req2 types.ResponsesRequest
 	_ = json.Unmarshal([]byte(body2), &req2)
-	chat2, _, _ := ResponsesToChat(&req2)
+	chat2, _, _ := ResponsesToChat(&req2, nil)
 	if chat2.ParallelToolCalls != nil {
 		t.Errorf("未提供时不应设置 parallel_tool_calls, 实际 %+v", chat2.ParallelToolCalls)
 	}
@@ -146,7 +146,7 @@ func TestRequestNamespaceTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestRequestToolConversation(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestRequestNamespaceToolConversation(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestRequestReasoningRoundTrip(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestRequestReasoningBeforeMessage(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestRequestContentBlockArray(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestRequestDeveloperRole(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestResponseNamespaceRestored(t *testing.T) {
 			{Type: "function", Name: "tavily_search"},
 		}},
 	}}
-	_, ns, err := ResponsesToChat(req)
+	_, ns, err := ResponsesToChat(req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +514,7 @@ func TestRequestNamespaceCallReflatten(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
-	chat, _, err := ResponsesToChat(&req)
+	chat, _, err := ResponsesToChat(&req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

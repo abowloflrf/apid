@@ -87,7 +87,7 @@ type ResponsesResponse struct {
 
 // IncompleteDetails 对应 Responses 响应的 incomplete_details 字段。
 // reason 取值如 "max_output_tokens"(对应上游 finish_reason="length")、
-// "content_filter"(对应 finish_reason="content_filter")。
+// "content_filter"(对应上游 finish_reason="content_filter")。
 type IncompleteDetails struct {
 	Reason string `json:"reason"`
 }

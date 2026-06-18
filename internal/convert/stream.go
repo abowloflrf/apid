@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/abowloflrf/apid/internal/types"
+	"github.com/google/uuid"
 )
 
 // SSEWriter 是流式输出需要的最小接口（http.ResponseWriter + Flush）。
@@ -20,13 +21,14 @@ type SSEWriter interface {
 	Flush()
 }
 
-// StreamResult 是流式转换的终态结果，承载流末拿到的 usage 与首 token 时刻。
-// 上游未发送 usage 分片时 Usage 为 nil；失败 / 中途出错同样为 nil。
-// FirstTokenAt 是收到上游第一个有内容增量(文本 / reasoning / tool_call)的时刻，
-// 供调用方计算 TTFT；整条流没有任何内容增量时为零值(IsZero() 为 true)。
+// StreamResult 是流式转换的终态结果，承载流末拿到的 usage、首 token 时刻，
+// 以及供回写 reasoning 缓存的 assistant 信息。
 type StreamResult struct {
-	Usage        *types.ChatUsage
-	FirstTokenAt time.Time
+	Usage         *types.ChatUsage
+	FirstTokenAt  time.Time
+	ToolCallIDs   []string // 所有 tool call 的 call_id，按 call_id 存 reasoning 用
+	ReasoningText string   // 累积的 reasoning_content
+	ContentText   string   // 累积的 assistant 文本，按内容指纹存 reasoning 用
 }
 
 // StreamChatToResponses 读取上游 Chat Completions 的 SSE 流，
@@ -40,15 +42,17 @@ type StreamResult struct {
 //	response.reasoning_summary_text.delta / .done (reasoning)
 //	response.function_call_arguments.delta / .done(工具调用参数)
 //	response.completed
-// namespaces 是「扁平工具名 -> (命名空间, 本地名)」映射(见 ToolNamespaces)，用于把
-// MCP 工具的 function_call 事件从上游扁平名拆回本地名 + namespace；无命名空间工具传 nil。
 func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) (*StreamResult, error) {
-	st := &streamState{w: w, model: model, tools: map[int]*toolState{}, namespaces: namespaces}
+	respID := newStreamUUID()
+	st := &streamState{
+		w: w, model: model, tools: map[int]*toolState{},
+		namespaces: namespaces, responseID: respID,
+	}
 
 	emit(w, "response.created", map[string]any{
 		"type": "response.created",
 		"response": map[string]any{
-			"id": respStreamID, "object": "response", "status": "in_progress",
+			"id": respID, "object": "response", "status": "in_progress",
 			"model": model, "output": []any{},
 		},
 	})
@@ -56,7 +60,6 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		// Client gone (disconnect / shutdown): stop converting and reading upstream.
 		if err := ctx.Err(); err != nil {
 			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
 		}
@@ -71,9 +74,6 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		if data == "[DONE]" {
 			break
 		}
-		// 上游可能在流中途以 {"error":{...}} 形式报错(vLLM / 兼容网关常见)。
-		// 此时已经发过 response.created，必须补一个 response.failed，
-		// 否则客户端等不到收尾事件会挂死或超时。
 		if msg := parseStreamError(data); msg != "" {
 			log.Printf("upstream stream error: %s", msg)
 			st.fail(msg)
@@ -95,24 +95,25 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		if len(chunk.Choices) == 0 {
 			continue
 		}
-		// finish_reason 通常在末尾一个 delta 为空的分片上携带，记录下来供收尾判断状态。
 		if fr := chunk.Choices[0].FinishReason; fr != nil && *fr != "" {
 			st.finishReason = *fr
 		}
 		st.handleDelta(chunk.Choices[0].Delta)
 	}
 	if err := scanner.Err(); err != nil {
-		// 读流出错(如单行超出缓冲上限)同样补发 response.failed 再返回。
 		st.fail(err.Error())
 		return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
 	}
 
 	st.finish()
-	return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, nil
+	return st.result()
 }
 
-// parseStreamError 探测一行 SSE data 是否是上游的错误对象，是则返回错误信息。
-// 普通分片没有 "error" 键，probe.Error 为 nil，返回空串。
+// newStreamUUID 生成不带连字符的 UUID，用作流式响应的 ID。
+func newStreamUUID() string {
+	return "resp_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+}
+
 func parseStreamError(data string) string {
 	var probe struct {
 		Error *struct {
@@ -128,21 +129,17 @@ func parseStreamError(data string) string {
 	return "upstream returned an error"
 }
 
-const respStreamID = "resp_stream"
-
 // streamState 累积一次流式响应的状态。
 type streamState struct {
-	w     SSEWriter
-	model string
-	usage *types.ChatUsage
+	w          SSEWriter
+	model      string
+	responseID string
+	usage      *types.ChatUsage
 
-	// 收到第一个有内容增量的时刻，用于 TTFT；后续增量不再覆盖。
 	firstTokenAt time.Time
-
-	// 上游最后一个非空 finish_reason，收尾时映射为 Responses 状态。
 	finishReason string
 
-	nextIndex int // 下一个 output item 的 output_index
+	nextIndex int
 
 	// reasoning item
 	reasoningOpen  bool
@@ -154,11 +151,10 @@ type streamState struct {
 	textIndex int
 	textBuf   strings.Builder
 
-	// function_call items，按上游 tool_call 的 index 归类
+	// function_call items
 	tools     map[int]*toolState
-	toolOrder []int // 保持出现顺序
+	toolOrder []int
 
-	// 扁平工具名 -> (命名空间, 本地名)，用于把 function_call 拆回本地名 + namespace。
 	namespaces map[string]NamespacedTool
 }
 
@@ -170,12 +166,9 @@ type toolState struct {
 	args        strings.Builder
 }
 
-func (st *streamState) reasoningItemID() string { return "rs_stream" }
-func (st *streamState) textItemID() string      { return "msg_stream" }
+func (st *streamState) reasoningItemID() string { return "rs_" + st.responseID }
+func (st *streamState) textItemID() string      { return "msg_" + st.responseID }
 
-// functionCallItem 组装一个 function_call item map。命名空间工具(MCP)要把上游扁平名
-// 拆回本地名 + namespace，缺 namespace 字段 Codex 会路由失败(unsupported call)。
-// added/done 共用，保证字段一致。
 func (st *streamState) functionCallItem(ts *toolState, status, args string) map[string]any {
 	name, namespace := splitToolName(ts.name, st.namespaces)
 	item := map[string]any{
@@ -188,9 +181,7 @@ func (st *streamState) functionCallItem(ts *toolState, status, args string) map[
 	return item
 }
 
-// handleDelta 处理一个 chat 分片的 delta。
 func (st *streamState) handleDelta(d types.ChatChunkDelta) {
-	// 第一个携带实际内容的增量决定 TTFT；空 delta(仅 finish_reason 等)不计入。
 	if st.firstTokenAt.IsZero() &&
 		(d.ReasoningContent != "" || d.Content != "" || len(d.ToolCalls) > 0) {
 		st.firstTokenAt = time.Now()
@@ -260,7 +251,7 @@ func (st *streamState) handleToolCall(tc types.ChatToolCall) {
 	if ts == nil {
 		ts = &toolState{
 			outputIndex: st.nextIndex,
-			itemID:      "fc_stream_" + strconv.Itoa(idx),
+			itemID:      "fc_" + st.responseID + "_" + strconv.Itoa(idx),
 			callID:      tc.ID,
 			name:        tc.Function.Name,
 		}
@@ -272,7 +263,6 @@ func (st *streamState) handleToolCall(tc types.ChatToolCall) {
 			"item": st.functionCallItem(ts, "in_progress", ""),
 		})
 	}
-	// id / name 可能在后续分片才补全。
 	if tc.ID != "" {
 		ts.callID = tc.ID
 	}
@@ -288,7 +278,6 @@ func (st *streamState) handleToolCall(tc types.ChatToolCall) {
 	}
 }
 
-// finish 发送收尾事件，并组装 response.completed。
 func (st *streamState) finish() {
 	outputs := make([]any, st.nextIndex)
 
@@ -319,7 +308,6 @@ func (st *streamState) finish() {
 			"type": "response.content_part.done", "item_id": st.textItemID(),
 			"output_index": st.textIndex, "content_index": 0, "part": part,
 		})
-		// 被截断时文本项标记 incomplete，与顶层状态一致。
 		itemStatus := statusCompleted
 		if s, _ := mapFinishReason(st.finishReason); s == statusIncomplete {
 			itemStatus = statusIncomplete
@@ -348,10 +336,9 @@ func (st *streamState) finish() {
 		outputs[ts.outputIndex] = item
 	}
 
-	// 由 finish_reason 决定收尾状态与事件名：被截断/被过滤时发 response.incomplete。
 	status, incompleteReason := mapFinishReason(st.finishReason)
 	resp := map[string]any{
-		"id": respStreamID, "object": "response", "status": status,
+		"id": st.responseID, "object": "response", "status": status,
 		"model": st.model, "output": outputs,
 	}
 	if incompleteReason != "" {
@@ -375,17 +362,32 @@ func (st *streamState) finish() {
 	emit(st.w, event, map[string]any{"type": event, "response": resp})
 }
 
-// fail 在流中途出错时补发 response.failed 事件，让客户端有明确的收尾。
+// result 从 streamState 构造 StreamResult，供调用方回写 reasoning 缓存。
+func (st *streamState) result() (*StreamResult, error) {
+	var callIDs []string
+	for _, idx := range st.toolOrder {
+		if ts := st.tools[idx]; ts.callID != "" {
+			callIDs = append(callIDs, ts.callID)
+		}
+	}
+	return &StreamResult{
+		Usage:         st.usage,
+		FirstTokenAt:  st.firstTokenAt,
+		ToolCallIDs:   callIDs,
+		ReasoningText: st.reasoningText.String(),
+		ContentText:   st.textBuf.String(),
+	}, nil
+}
+
 func (st *streamState) fail(message string) {
 	resp := map[string]any{
-		"id": respStreamID, "object": "response", "status": statusFailed,
+		"id": st.responseID, "object": "response", "status": statusFailed,
 		"model": st.model, "output": []any{},
 		"error": map[string]any{"code": "upstream_error", "message": message},
 	}
 	emit(st.w, "response.failed", map[string]any{"type": "response.failed", "response": resp})
 }
 
-// emit 写一条 SSE 事件（event: 行 + data: 行 + 空行）并立即 flush。
 func emit(w SSEWriter, event string, payload any) {
 	b, err := json.Marshal(payload)
 	if err != nil {
