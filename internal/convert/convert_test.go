@@ -687,7 +687,10 @@ func TestStreamToolsAndReasoning(t *testing.T) {
 	// 关键事件都应出现
 	for _, ev := range []string{
 		"response.created",
+		"response.reasoning_summary_part.added",
 		"response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done",
+		"response.reasoning_summary_part.done",
 		"response.function_call_arguments.delta",
 		"response.function_call_arguments.done",
 		"response.completed",
@@ -695,6 +698,15 @@ func TestStreamToolsAndReasoning(t *testing.T) {
 		if !strings.Contains(out, "event: "+ev) {
 			t.Errorf("缺少事件 %s", ev)
 		}
+	}
+	// part 生命周期必须包住文本：part.added 在首个 delta 之前，part.done 在 text.done 之后。
+	if i, j := strings.Index(out, "event: response.reasoning_summary_part.added"),
+		strings.Index(out, "event: response.reasoning_summary_text.delta"); i < 0 || i > j {
+		t.Errorf("reasoning_summary_part.added 应在首个 delta 之前, 输出:\n%s", out)
+	}
+	if i, j := strings.Index(out, "event: response.reasoning_summary_text.done"),
+		strings.Index(out, "event: response.reasoning_summary_part.done"); i < 0 || i > j {
+		t.Errorf("reasoning_summary_part.done 应在 text.done 之后, 输出:\n%s", out)
 	}
 	// 完整参数应被拼接出来
 	if !strings.Contains(out, `{\"city\":\"沪\"}`) {

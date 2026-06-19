@@ -209,6 +209,13 @@ func (st *streamState) handleReasoning(delta string) {
 				"status": "in_progress", "summary": []any{},
 			},
 		})
+		// 开 summary part 槽位：与文本路径的 content_part.added 对称，
+		// 严格客户端据此才会为 summary_index=0 建槽，否则丢弃后续 delta。
+		emit(st.w, "response.reasoning_summary_part.added", map[string]any{
+			"type": "response.reasoning_summary_part.added", "item_id": st.reasoningItemID(),
+			"output_index": st.reasoningIndex, "summary_index": 0,
+			"part": map[string]any{"type": "summary_text", "text": ""},
+		})
 	}
 	st.reasoningText.WriteString(delta)
 	emit(st.w, "response.reasoning_summary_text.delta", map[string]any{
@@ -286,6 +293,12 @@ func (st *streamState) finish() {
 		emit(st.w, "response.reasoning_summary_text.done", map[string]any{
 			"type": "response.reasoning_summary_text.done", "item_id": st.reasoningItemID(),
 			"output_index": st.reasoningIndex, "summary_index": 0, "text": text,
+		})
+		// 关 summary part 槽位：与文本路径的 content_part.done 对称。
+		emit(st.w, "response.reasoning_summary_part.done", map[string]any{
+			"type": "response.reasoning_summary_part.done", "item_id": st.reasoningItemID(),
+			"output_index": st.reasoningIndex, "summary_index": 0,
+			"part": map[string]any{"type": "summary_text", "text": text},
 		})
 		item := map[string]any{
 			"id": st.reasoningItemID(), "type": "reasoning", "status": "completed",
