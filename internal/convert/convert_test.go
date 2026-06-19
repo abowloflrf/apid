@@ -388,6 +388,45 @@ func TestResponseToolsAndReasoning(t *testing.T) {
 	}
 }
 
+// P2: 上游 completion_tokens_details.reasoning_tokens 映射为 output_tokens_details。
+func TestResponseUsageReasoningTokens(t *testing.T) {
+	chat := &types.ChatResponse{
+		ID: "chatcmpl-x", Model: "m",
+		Choices: []types.ChatChoice{{
+			Message: types.ChatMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop",
+		}},
+		Usage: &types.ChatUsage{
+			PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18,
+			CompletionTokensDetails: &types.ChatCompletionTokensDetails{ReasoningTokens: 5},
+		},
+	}
+	resp := ChatToResponses(chat, nil)
+	if resp.Usage == nil || resp.Usage.OutputTokensDetails == nil {
+		t.Fatalf("output_tokens_details 缺失: %+v", resp.Usage)
+	}
+	if resp.Usage.OutputTokensDetails.ReasoningTokens != 5 {
+		t.Errorf("reasoning_tokens = %d, 期望 5", resp.Usage.OutputTokensDetails.ReasoningTokens)
+	}
+}
+
+// P3: 上游用 reasoning 字符串(非 reasoning_content)时也应产出 reasoning 输出项。
+func TestResponseReasoningFromAltField(t *testing.T) {
+	raw := `{"id":"chatcmpl-x","model":"m","choices":[{"index":0,
+		"message":{"role":"assistant","reasoning":"另一种字段","content":"答"},
+		"finish_reason":"stop"}]}`
+	var chat types.ChatResponse
+	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
+		t.Fatal(err)
+	}
+	resp := ChatToResponses(&chat, nil)
+	if len(resp.Output) != 2 || resp.Output[0].Type != "reasoning" {
+		t.Fatalf("应有 reasoning + message 两项: %+v", resp.Output)
+	}
+	if resp.Output[0].Summary[0].Text != "另一种字段" {
+		t.Errorf("reasoning 文本 = %q", resp.Output[0].Summary[0].Text)
+	}
+}
+
 func TestResponseIncompleteOnLength(t *testing.T) {
 	// 上游因 max_tokens 截断(finish_reason=length)，整体状态与 message 项都应是 incomplete，
 	// 并带 incomplete_details.reason=max_output_tokens，而不是谎报 completed。
@@ -552,7 +591,7 @@ func TestStreamResultUsageAndTTFT(t *testing.T) {
 	// honoring stream_options.include_usage.
 	raw := "data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
 		"data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
-		"data: " + `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6}}}` + "\n\n" +
+		"data: " + `{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14,"prompt_tokens_details":{"cached_tokens":6},"completion_tokens_details":{"reasoning_tokens":3}}}` + "\n\n" +
 		"data: [DONE]\n\n"
 	var s sink
 	result, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
@@ -569,12 +608,15 @@ func TestStreamResultUsageAndTTFT(t *testing.T) {
 	if u.PromptTokensDetails == nil || u.PromptTokensDetails.CachedTokens != 6 {
 		t.Errorf("cached tokens not preserved: %+v", u.PromptTokensDetails)
 	}
+	if u.CompletionTokensDetails == nil || u.CompletionTokensDetails.ReasoningTokens != 3 {
+		t.Errorf("reasoning tokens not preserved: %+v", u.CompletionTokensDetails)
+	}
 	if result.FirstTokenAt.IsZero() {
 		t.Error("FirstTokenAt should be set by the first content delta")
 	}
-	// response.completed must expose usage to the client, cached_tokens included.
+	// response.completed must expose usage to the client, cached + reasoning tokens included.
 	out := s.b.String()
-	for _, want := range []string{`"input_tokens":10`, `"output_tokens":4`, `"total_tokens":14`, `"cached_tokens":6`} {
+	for _, want := range []string{`"input_tokens":10`, `"output_tokens":4`, `"total_tokens":14`, `"cached_tokens":6`, `"reasoning_tokens":3`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("response.completed missing %s, output:\n%s", want, out)
 		}

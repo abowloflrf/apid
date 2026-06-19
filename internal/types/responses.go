@@ -126,14 +126,21 @@ type SummaryText struct {
 
 // ResponseUsage 对应 Responses API 的 usage 字段。
 type ResponseUsage struct {
-	InputTokens        int                 `json:"input_tokens"`
-	InputTokensDetails *InputTokensDetails `json:"input_tokens_details,omitempty"`
-	OutputTokens       int                 `json:"output_tokens"`
-	TotalTokens        int                 `json:"total_tokens"`
+	InputTokens         int                  `json:"input_tokens"`
+	InputTokensDetails  *InputTokensDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokens        int                  `json:"output_tokens"`
+	OutputTokensDetails *OutputTokensDetails `json:"output_tokens_details,omitempty"`
+	TotalTokens         int                  `json:"total_tokens"`
 }
 
 // InputTokensDetails 是 Responses usage.input_tokens_details，含缓存命中信息。
 // 由上游 Chat 的 prompt_tokens_details 映射而来。
 type InputTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+// OutputTokensDetails 是 Responses usage.output_tokens_details，含思考 token 数。
+// 由上游 Chat 的 completion_tokens_details 映射而来。
+type OutputTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }

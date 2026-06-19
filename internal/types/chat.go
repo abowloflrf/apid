@@ -83,16 +83,23 @@ type ChatChoice struct {
 }
 
 type ChatUsage struct {
-	PromptTokens        int                      `json:"prompt_tokens"`
-	CompletionTokens    int                      `json:"completion_tokens"`
-	TotalTokens         int                      `json:"total_tokens"`
-	PromptTokensDetails *ChatPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	PromptTokens            int                          `json:"prompt_tokens"`
+	CompletionTokens        int                          `json:"completion_tokens"`
+	TotalTokens             int                          `json:"total_tokens"`
+	PromptTokensDetails     *ChatPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *ChatCompletionTokensDetails `json:"completion_tokens_details,omitempty"`
 }
 
 // ChatPromptTokensDetails 是 usage.prompt_tokens_details，含缓存命中信息。
 // 该字段由 OpenAI 官方及部分兼容上游(vLLM 等)返回，上游不给时为 nil。
 type ChatPromptTokensDetails struct {
 	CachedTokens int `json:"cached_tokens"`
+}
+
+// ChatCompletionTokensDetails 是 usage.completion_tokens_details，含思考 token 数。
+// 思考模型上游返回 reasoning_tokens，映射为 Responses 的 output_tokens_details。
+type ChatCompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 // ---------- Chat Completions API 流式分片 ----------

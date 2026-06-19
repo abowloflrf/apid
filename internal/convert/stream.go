@@ -366,6 +366,9 @@ func (st *streamState) finish() {
 		if d := st.usage.PromptTokensDetails; d != nil {
 			usage["input_tokens_details"] = map[string]any{"cached_tokens": d.CachedTokens}
 		}
+		if d := st.usage.CompletionTokensDetails; d != nil {
+			usage["output_tokens_details"] = map[string]any{"reasoning_tokens": d.ReasoningTokens}
+		}
 		resp["usage"] = usage
 	}
 	event := "response.completed"

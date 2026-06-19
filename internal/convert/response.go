@@ -92,6 +92,9 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 		if d := c.Usage.PromptTokensDetails; d != nil {
 			resp.Usage.InputTokensDetails = &types.InputTokensDetails{CachedTokens: d.CachedTokens}
 		}
+		if d := c.Usage.CompletionTokensDetails; d != nil {
+			resp.Usage.OutputTokensDetails = &types.OutputTokensDetails{ReasoningTokens: d.ReasoningTokens}
+		}
 	}
 
 	return resp
