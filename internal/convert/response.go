@@ -43,16 +43,25 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 		})
 	}
 
-	// 2) message：有文本内容时输出 output_text 消息项。
-	if msg.Content != "" {
+	// 2) message：有文本内容或 refusal 时输出 message 项。
+	// 上游拒绝(content_filter 等)走 refusal 字段，映射为 refusal 内容块，
+	// 否则客户端只看到一条空 message、不知为何无输出。
+	if msg.Content != "" || msg.Refusal != "" {
+		content := make([]types.OutputContent, 0, 2)
+		if msg.Content != "" {
+			content = append(content, types.OutputContent{
+				Type: "output_text", Text: msg.Content, Annotations: []any{},
+			})
+		}
+		if msg.Refusal != "" {
+			content = append(content, types.OutputContent{Type: "refusal", Refusal: msg.Refusal})
+		}
 		output = append(output, types.OutputItem{
-			Type:   "message",
-			ID:     "msg_" + id,
-			Status: msgStatus,
-			Role:   "assistant",
-			Content: []types.OutputContent{
-				{Type: "output_text", Text: msg.Content, Annotations: []any{}},
-			},
+			Type:    "message",
+			ID:      "msg_" + id,
+			Status:  msgStatus,
+			Role:    "assistant",
+			Content: content,
 		})
 	}
 

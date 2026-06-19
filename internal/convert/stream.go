@@ -47,14 +47,17 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 	st := &streamState{
 		w: w, model: model, tools: map[int]*toolState{},
 		namespaces: namespaces, responseID: respID,
+		createdAt: time.Now().Unix(),
 	}
 
+	// 开场两连发：response.created → response.in_progress，两者携带同一个
+	// created_at 与 usage 占位，对齐 Responses schema(created_at 必填)，
+	// 也满足按 in_progress 转状态机的严格客户端(如 Codex TUI)。
 	emit(w, "response.created", map[string]any{
-		"type": "response.created",
-		"response": map[string]any{
-			"id": respID, "object": "response", "status": "in_progress",
-			"model": model, "output": []any{},
-		},
+		"type": "response.created", "response": st.openingResponse(),
+	})
+	emit(w, "response.in_progress", map[string]any{
+		"type": "response.in_progress", "response": st.openingResponse(),
 	})
 
 	scanner := bufio.NewScanner(body)
@@ -134,6 +137,7 @@ type streamState struct {
 	w          SSEWriter
 	model      string
 	responseID string
+	createdAt  int64
 	usage      *types.ChatUsage
 
 	firstTokenAt time.Time
@@ -168,6 +172,16 @@ type toolState struct {
 
 func (st *streamState) reasoningItemID() string { return "rs_" + st.responseID }
 func (st *streamState) textItemID() string      { return "msg_" + st.responseID }
+
+// openingResponse 是 response.created / .in_progress 共用的瘦 response 对象。
+// 带 created_at(schema 必填)；usage 此刻为 null，与官方一致，最终用量在 finish 回填。
+func (st *streamState) openingResponse() map[string]any {
+	return map[string]any{
+		"id": st.responseID, "object": "response", "created_at": st.createdAt,
+		"status": "in_progress", "model": st.model, "output": []any{},
+		"usage": nil,
+	}
+}
 
 func (st *streamState) functionCallItem(ts *toolState, status, args string) map[string]any {
 	name, namespace := splitToolName(ts.name, st.namespaces)
@@ -351,8 +365,8 @@ func (st *streamState) finish() {
 
 	status, incompleteReason := mapFinishReason(st.finishReason)
 	resp := map[string]any{
-		"id": st.responseID, "object": "response", "status": status,
-		"model": st.model, "output": outputs,
+		"id": st.responseID, "object": "response", "created_at": st.createdAt,
+		"status": status, "model": st.model, "output": outputs,
 	}
 	if incompleteReason != "" {
 		resp["incomplete_details"] = map[string]any{"reason": incompleteReason}
@@ -397,8 +411,8 @@ func (st *streamState) result() (*StreamResult, error) {
 
 func (st *streamState) fail(message string) {
 	resp := map[string]any{
-		"id": st.responseID, "object": "response", "status": statusFailed,
-		"model": st.model, "output": []any{},
+		"id": st.responseID, "object": "response", "created_at": st.createdAt,
+		"status": statusFailed, "model": st.model, "output": []any{},
 		"error": map[string]any{"code": "upstream_error", "message": message},
 	}
 	emit(st.w, "response.failed", map[string]any{"type": "response.failed", "response": resp})

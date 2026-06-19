@@ -338,6 +338,35 @@ func TestResponseContentFilter(t *testing.T) {
 	}
 }
 
+// P4: 流式开场应连发 response.created → response.in_progress，且两者都带
+// created_at(schema 必填)与 usage 占位；收尾 response.completed 也应带 created_at。
+func TestStreamCreatedAndInProgress(t *testing.T) {
+	raw := "data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
+		"data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
+		t.Fatal(err)
+	}
+	out := s.b.String()
+
+	i := strings.Index(out, "event: response.created")
+	j := strings.Index(out, "event: response.in_progress")
+	if i < 0 || j < 0 || i > j {
+		t.Fatalf("应先发 response.created 再发 response.in_progress, 输出:\n%s", out)
+	}
+	// 开场对象需带 created_at；usage 此刻为 null，与官方规范一致。
+	for _, want := range []string{`"created_at":`, `"usage":null`} {
+		if !strings.Contains(out[:strings.Index(out, "event: response.output")], want) {
+			t.Errorf("开场事件缺少 %s, 输出:\n%s", want, out)
+		}
+	}
+	// 收尾事件也应带 created_at。
+	if tail := out[strings.Index(out, "event: response.completed"):]; !strings.Contains(tail, `"created_at":`) {
+		t.Errorf("response.completed 缺少 created_at, 输出:\n%s", out)
+	}
+}
+
 func TestStreamReadError(t *testing.T) {
 	// 单行超出扫描缓冲上限(1MB)会让 bufio.Scanner 报错；此时已发过
 	// response.created，必须补发 response.failed 并向上返回错误，
@@ -424,6 +453,44 @@ func TestResponseReasoningFromAltField(t *testing.T) {
 	}
 	if resp.Output[0].Summary[0].Text != "另一种字段" {
 		t.Errorf("reasoning 文本 = %q", resp.Output[0].Summary[0].Text)
+	}
+}
+
+// P5: 上游把非流式 message.content 返回成内容块数组时不应崩溃，文本应被拼接。
+func TestResponseContentBlockArray(t *testing.T) {
+	raw := `{"id":"chatcmpl-x","model":"m","choices":[{"index":0,
+		"message":{"role":"assistant","content":[
+			{"type":"text","text":"前"},{"type":"text","text":"后"}]},
+		"finish_reason":"stop"}]}`
+	var chat types.ChatResponse
+	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
+		t.Fatalf("数组形态 content 不应反序列化失败: %v", err)
+	}
+	resp := ChatToResponses(&chat, nil)
+	if len(resp.Output) != 1 || resp.Output[0].Type != "message" {
+		t.Fatalf("应有一条 message 输出项: %+v", resp.Output)
+	}
+	if got := resp.Output[0].Content[0].Text; got != "前后" {
+		t.Errorf("content 数组未拼接, 实际 %q", got)
+	}
+}
+
+// P5: 上游返回 refusal(content 缺省)时不应崩溃，应映射为 refusal 内容块。
+func TestResponseRefusal(t *testing.T) {
+	raw := `{"id":"chatcmpl-x","model":"m","choices":[{"index":0,
+		"message":{"role":"assistant","refusal":"我不能这么做"},
+		"finish_reason":"stop"}]}`
+	var chat types.ChatResponse
+	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
+		t.Fatalf("refusal 形态不应反序列化失败: %v", err)
+	}
+	resp := ChatToResponses(&chat, nil)
+	if len(resp.Output) != 1 || len(resp.Output[0].Content) != 1 {
+		t.Fatalf("应有一条含单内容块的 message: %+v", resp.Output)
+	}
+	c := resp.Output[0].Content[0]
+	if c.Type != "refusal" || c.Refusal != "我不能这么做" {
+		t.Errorf("refusal 内容块不对: %+v", c)
 	}
 }
 

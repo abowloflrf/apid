@@ -5,20 +5,49 @@ import (
 	"strings"
 )
 
-// UnmarshalJSON 在标准解析之外，按多家上游约定回退提取 reasoning 文本。
-// 优先级：reasoning_content > reasoning(字符串/对象) > reasoning_details。
-// 兼容 vLLM/DeepSeek(reasoning_content)、OpenRouter(reasoning 字符串)及结构化 reasoning。
+// UnmarshalJSON 在标准解析之外做两件事：
+//  1. 把 content 归一为字符串——上游可能返回字符串、内容块数组或干脆省略
+//     (配 refusal)，直接按 string 解析会让整条响应反序列化失败。
+//  2. 按多家上游约定回退提取 reasoning 文本：
+//     reasoning_content > reasoning(字符串/对象) > reasoning_details。
+//     兼容 vLLM/DeepSeek(reasoning_content)、OpenRouter(reasoning 字符串)及结构化 reasoning。
 func (m *ChatMessage) UnmarshalJSON(data []byte) error {
 	type alias ChatMessage // 借别名避免递归调用本方法
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
+	// 用 RawMessage 接住 content，避免数组形态炸掉整次解析；其余字段经嵌入的
+	// alias 直接落到 m 上(content 字段被浅层的 RawMessage 遮蔽，不会写进 m)。
+	aux := struct {
+		*alias
+		Content json.RawMessage `json:"content"`
+	}{alias: (*alias)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	*m = ChatMessage(a)
+	m.Content = contentText(aux.Content)
 	if m.ReasoningContent == "" {
 		m.ReasoningContent = extractReasoningField(data)
 	}
 	return nil
+}
+
+// contentText 提取 Chat 响应里 message.content 的纯文本，
+// 兼容上游把 content 返回成字符串或内容块数组([{type,text},...])两种形态。
+func contentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var parts []InputContentPart
+	if json.Unmarshal(raw, &parts) != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, p := range parts {
+		b.WriteString(p.Text)
+	}
+	return b.String()
 }
 
 // UnmarshalJSON 同 ChatMessage，处理流式 delta 里的多态 reasoning 字段。

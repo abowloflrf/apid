@@ -27,11 +27,14 @@ type StreamOptions struct {
 }
 
 // ChatMessage 是一条聊天消息。
-// demo 中 content 统一用纯字符串形式；assistant 的工具调用放在 ToolCalls，
+// 本项目内部 content 统一为纯字符串；assistant 的工具调用放在 ToolCalls，
 // 工具结果用 role=="tool" + ToolCallID 表达。
+// 上游响应里 content 可能是字符串、内容块数组或缺省(配 refusal)，
+// 这些形态由 UnmarshalJSON 归一(见 chat_reasoning.go)。
 type ChatMessage struct {
 	Role             string         `json:"role"`
 	Content          string         `json:"content,omitempty"`
+	Refusal          string         `json:"refusal,omitempty"`
 	Name             string         `json:"name,omitempty"`
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`

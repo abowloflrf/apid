@@ -111,11 +111,32 @@ type OutputItem struct {
 	Summary []SummaryText `json:"summary,omitempty"`
 }
 
-// OutputContent 是 message 内容块，这里只实现 output_text。
+// OutputContent 是 message 内容块：output_text(正常文本)或 refusal(模型拒绝)。
+// 两种形态字段不同——output_text 是 {type,text,annotations}，refusal 按规范
+// 只有 {type,refusal}——故用 MarshalJSON 各自只输出规范要求的字段。
 type OutputContent struct {
-	Type        string `json:"type"` // "output_text"
+	Type        string `json:"type"` // "output_text" / "refusal"
 	Text        string `json:"text"`
+	Refusal     string `json:"refusal"`
 	Annotations []any  `json:"annotations"`
+}
+
+func (c OutputContent) MarshalJSON() ([]byte, error) {
+	if c.Type == "refusal" {
+		return json.Marshal(struct {
+			Type    string `json:"type"`
+			Refusal string `json:"refusal"`
+		}{c.Type, c.Refusal})
+	}
+	ann := c.Annotations
+	if ann == nil {
+		ann = []any{}
+	}
+	return json.Marshal(struct {
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		Annotations []any  `json:"annotations"`
+	}{c.Type, c.Text, ann})
 }
 
 // SummaryText 是 reasoning 输出项里的摘要块。
