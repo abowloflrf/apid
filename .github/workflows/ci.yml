@@ -4,13 +4,19 @@ on:
   push:
     branches:
       - main
-      - master
     tags:
       - "v*"
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# Cancel in-progress runs for the same branch/PR to avoid wasting
+# runner minutes on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -27,9 +33,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Download dependencies
-        run: go mod download
 
       - name: Vet
         run: go vet ./...
@@ -49,6 +52,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Needed for provenance attestation
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -78,19 +84,23 @@ jobs:
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and optionally push image
         uses: docker/build-push-action@v7
         with:
           context: .
+          pull: true
           # PRs only validate the build, amd64 alone is enough
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: ${{ github.event_name != 'pull_request' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
 
   release:
     name: Release

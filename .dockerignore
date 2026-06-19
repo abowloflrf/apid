@@ -1,0 +1,49 @@
+# Git
+.git
+.gitattributes
+.gitignore
+.github
+
+# Go build/test artifacts
+*.test
+*.out
+cover.out
+coverage.*
+
+# IDE / editor
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data (not needed for build)
+data/
+
+# Trace dumps
+trace/
+
+# Temp files
+tmp/
+/tmp/
+
+# Dev-only configs
+.agents
+.codex
+CLAUDE.md
+
+# Docs (not needed for build)
+*.md
+docs/
+
+# Docker files themselves
+.dockerignore
+Dockerfile*
+docker-compose*
+
+# Vendor
+vendor/
