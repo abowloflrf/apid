@@ -56,8 +56,23 @@ APID_DB=apid.db go run .
 sqlite3 apid.db < scripts/apid-stats.sql
 ```
 
-Also exposes `GET /stats/daily` (per-day aggregation for Grafana Infinity) and
-`GET /healthz`.
+With `APID_DB` set, open **`/stats/`** for an interactive dashboard (KPIs, time
+series, per-model breakdown and a request log, all filterable by time range /
+model / protocol). It's self-contained — embedded in the binary, no external CDN.
+
+JSON API behind it (shared params `from`/`to` as Unix ms or RFC3339, `tz_offset`,
+repeatable/comma-separated `model` & `protocol`):
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /stats/summary` | grand-total metrics for the window |
+| `GET /stats/by_model` | per-upstream-model aggregation |
+| `GET /stats/timeseries` | time buckets (`bucket=15min\|hour\|day`) |
+| `GET /stats/requests` | recent request detail (`limit`, `offset`, `errors_only`) |
+| `GET /stats/options` | distinct models / protocols + time span (filter UI) |
+| `GET /stats/daily` | per-day aggregation for Grafana Infinity |
+
+Also `GET /healthz`.
 
 ## Test
 

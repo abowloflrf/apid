@@ -1,0 +1,392 @@
+:root {
+  /* Quiet editorial theme: warm paper ground, hairline rules, near-monochrome
+     chrome. Color is spent only on the data (charts, dots, sparklines), never on
+     the furniture — so the page reads calm and the numbers carry the eye. */
+  --bg: #f5f3ee;          /* warm paper */
+  --panel: #fdfcf9;       /* card / warm white */
+  --panel-2: #efece3;     /* hover · track */
+  --panel-3: #e7e3d8;
+  --border: #e6e1d6;      /* warm hairline */
+  --border-strong: #d6d0c2;
+  --text: #413e37;        /* warm ink */
+  --text-strong: #221f19; /* near-black, warm */
+  --muted: #7a766c;
+  --muted-2: #aaa499;
+
+  --accent: #5f6f96;      /* muted slate-indigo, the single chrome accent */
+  --accent-soft: #eaecf2;
+  --green: #6f9576;       /* sage */
+  --amber: #bb9a55;       /* ochre */
+  --red: #c07b73;         /* clay, used sparingly */
+  --red-ink: #a45c54;
+  --purple: #897fa8;      /* muted lavender */
+  --teal: #5f9499;
+  --pink: #b98ca0;
+
+  /* Shadows are a whisper, reserved for things that genuinely float (popovers,
+     toast, tooltips). Cards and bars rely on hairline borders alone. */
+  --shadow-sm: 0 1px 1px rgba(40, 36, 28, .03);
+  --shadow-md: 0 1px 2px rgba(40, 36, 28, .05);
+  --shadow-pop: 0 10px 30px rgba(40, 36, 28, .13);
+
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+}
+
+button, input, select { font-family: inherit; color: inherit; }
+.tnum, .k-value, .data-table td, .status { font-variant-numeric: tabular-nums; }
+
+h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .2px; color: var(--text-strong); }
+
+.spacer { flex: 1; }
+
+/* ---- Top bars ---- */
+/* The top bar and the filter/status bar pin together as one floating stack, so
+   the controls + status line stay reachable while the page scrolls. Sticking the
+   wrapper (rather than each bar) stays correct when either bar wraps. */
+.topbars { position: sticky; top: 0; z-index: 50; }
+
+.topbar {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 26px;
+  background: rgba(253, 252, 249, .86);
+  backdrop-filter: saturate(120%) blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+/* Masthead: a lowercase mono wordmark (CLI-tool signature) trailed by a tracked
+   uppercase section label, set off by a hairline middot. */
+.brand { display: flex; align-items: baseline; gap: 9px; }
+.brand .logo { font-family: var(--mono); font-weight: 600; font-size: 18px; letter-spacing: -.3px; color: var(--text-strong); }
+.brand .sub { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; font-weight: 700; }
+.brand .sub::before { content: "·"; margin-right: 9px; color: var(--muted-2); font-weight: 400; }
+
+.ranges, .seg {
+  display: flex; gap: 2px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 9px; padding: 3px;
+}
+.ranges button, .seg button {
+  background: transparent; border: 0; color: var(--muted);
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+  transition: background .15s, color .15s, box-shadow .15s;
+}
+.ranges button:hover, .seg button:hover { color: var(--text-strong); }
+/* Active = a quiet white pill (monochrome). The accent stays out of the chrome. */
+.ranges button.active, .seg button.active {
+  background: var(--panel); color: var(--text-strong); box-shadow: var(--shadow-sm);
+}
+
+.custom-range { display: flex; align-items: center; gap: 6px; }
+.custom-range input {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 9px; font-size: 12px; color-scheme: light;
+}
+.custom-range input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.custom-range .dash { color: var(--muted-2); }
+
+.auto { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.auto input { accent-color: var(--accent); }
+
+.refresh {
+  background: var(--panel); border: 1px solid var(--border); color: var(--muted);
+  width: 33px; height: 33px; border-radius: 9px; cursor: pointer; font-size: 16px; line-height: 1;
+  transition: transform .3s, color .15s, border-color .15s;
+}
+.refresh:hover { color: var(--text-strong); border-color: var(--border-strong); }
+.refresh.spin { animation: spin .6s ease; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Filters ---- */
+.filters {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 26px; border-bottom: 1px solid var(--border);
+  background: rgba(253, 252, 249, .86);
+  backdrop-filter: saturate(120%) blur(8px);
+}
+.status { font-size: 12px; color: var(--muted-2); font-family: var(--mono); }
+
+/* ---- Multiselect dropdown ---- */
+.ms { position: relative; }
+.ms-toggle {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 9px;
+  padding: 6px 12px; cursor: pointer; font-size: 12px; min-width: 148px;
+  transition: border-color .15s;
+}
+.ms-toggle:hover { border-color: var(--border-strong); }
+.ms-toggle .label { color: var(--muted); font-weight: 600; }
+.ms-toggle .count {
+  margin-left: auto; background: var(--panel-2); color: var(--text-strong); font-size: 10px;
+  border-radius: 10px; padding: 1px 7px; font-weight: 700; min-width: 16px; text-align: center;
+  border: 1px solid var(--border);
+}
+.ms-toggle .count.zero { background: transparent; color: var(--muted-2); }
+.ms-toggle .caret { color: var(--muted-2); font-size: 9px; }
+.ms-panel {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: var(--shadow-pop); padding: 6px; min-width: 234px; max-width: 360px;
+  max-height: 330px; overflow-y: auto; display: none;
+}
+.ms-panel.open { display: block; }
+.ms-actions { display: flex; gap: 6px; padding: 4px 4px 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.ms-actions button {
+  flex: 1; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  border-radius: 7px; padding: 5px; font-size: 11px; cursor: pointer; transition: color .15s, border-color .15s;
+}
+.ms-actions button:hover { color: var(--text-strong); border-color: var(--border-strong); }
+.ms-opt {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px;
+  cursor: pointer; font-size: 12px;
+}
+.ms-opt:hover { background: var(--panel-2); }
+.ms-opt input { accent-color: var(--accent); }
+.ms-opt .swatch { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+.ms-opt .name { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-empty { color: var(--muted-2); font-size: 12px; padding: 8px; }
+
+/* ---- Main ---- */
+main { padding: 24px 26px 64px; max-width: 1600px; margin: 0 auto; }
+
+/* ---- KPI cards ---- */
+.kpis {
+  display: grid; gap: 12px; margin-bottom: 22px;
+  /* Keep all eight headline metrics on one row on desktop; fold to 4 then 2
+     columns only when the viewport can no longer hold eight readable cards.
+     minmax(0, …) lets the cards shrink below content width so they always fit. */
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+/* Below desktop, fold to four columns — eight metrics then occupy at most two
+   rows at any width (never the four rows a 2-col layout would give). */
+@media (max-width: 1300px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* On phones, four columns are tight, so strip each card to just its dot-label +
+   value (drop the sparkline and sub-line) and pull everything in. */
+@media (max-width: 640px) {
+  main { padding: 16px 14px 48px; }
+  .kpis { gap: 8px; margin-bottom: 16px; }
+  .kpi { padding: 10px 10px; }
+  .kpi .k-label { font-size: 9px; letter-spacing: .3px; gap: 5px; }
+  .kpi .k-label::before { width: 5px; height: 5px; }
+  .kpi .k-value { font-size: 15px; margin-top: 5px; letter-spacing: -.3px; }
+  .kpi .k-sub, .kpi .spark { display: none; }
+  .skel-line.xs, .skel-line.spark-skel { display: none; }
+}
+.kpi {
+  display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 15px; position: relative; overflow: hidden;
+  transition: border-color .18s ease;
+}
+.kpi:hover { border-color: var(--border-strong); }
+/* A single small dot carries the metric's color into the otherwise monochrome
+   card — the same dot vocabulary the tables use. */
+.kpi .k-label {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; font-weight: 600;
+}
+.kpi .k-label::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.kpi.green .k-label::before { background: var(--green); }
+.kpi.amber .k-label::before { background: var(--amber); }
+.kpi.red .k-label::before { background: var(--red); }
+.kpi.purple .k-label::before { background: var(--purple); }
+.kpi.teal .k-label::before { background: var(--teal); }
+.kpi .k-value { font-size: clamp(20px, 1.55vw, 26px); font-weight: 600; font-family: var(--mono); margin-top: 8px; line-height: 1.1; letter-spacing: -.5px; color: var(--text-strong); white-space: nowrap; }
+.kpi .k-value small { font-size: 13px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+.kpi .k-sub { font-size: 11px; color: var(--muted-2); margin-top: 5px; font-family: var(--mono); }
+
+/* Sparkline strip anchored to the card bottom — a faint hairline trend, no
+   end marker or axes. Trend context only; the KPI number is the headline. */
+.kpi .spark { display: block; width: 100%; height: 26px; margin-top: auto; padding-top: 14px; overflow: visible; }
+.spark-area { fill-opacity: .06; }
+.spark-line { fill: none; stroke-width: 1.25; vector-effect: non-scaling-stroke; opacity: .75; }
+.kpi:hover .spark-area { fill-opacity: .12; }
+.kpi:hover .spark-line { opacity: 1; }
+
+/* ---- Condensed KPI chips (inline in the status bar) ----
+   The key summary numbers live flat in the (sticky) filter/status bar, in the
+   same small-mono + colored-dot language as the tables — always a glance away
+   while scrolling, with no separate floating card. */
+.status-kpis {
+  display: flex; align-items: center; gap: 13px;
+  max-width: 100%; overflow-x: auto;
+  -ms-overflow-style: none; scrollbar-width: none;
+}
+.status-kpis::-webkit-scrollbar { display: none; }
+.status-kpis .c-item {
+  display: flex; align-items: baseline; gap: 5px; flex: none;
+  font-size: 11.5px; font-family: var(--mono);
+}
+.status-kpis .c-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--muted); font-weight: 600;
+}
+.status-kpis .c-value { font-weight: 700; color: var(--text-strong); }
+.status-kpis .c-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none; opacity: .85;
+}
+.status-kpis .c-sep {
+  width: 1px; height: 13px; background: var(--border-strong); flex: none;
+}
+
+/* ---- Charts ---- */
+.charts { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-bottom: 22px; }
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 18px; transition: border-color .18s ease;
+}
+.chart-card:hover, .table-card:hover { border-color: var(--border-strong); }
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; gap: 10px; }
+.card-head .hint { font-size: 11px; color: var(--muted-2); font-family: var(--mono); }
+.head-controls { display: flex; align-items: center; gap: 10px; }
+.head-controls select {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px; font-size: 12px;
+}
+.canvas-wrap { position: relative; height: 244px; }
+.canvas-wrap.doughnut { height: 284px; }
+.span2-doughnut { grid-column: span 2; }
+
+@media (max-width: 980px) {
+  .charts { grid-template-columns: 1fr; }
+  .span2-doughnut { grid-column: span 1; }
+}
+
+/* ---- Tables ---- */
+.table-card { margin-bottom: 18px; }
+.table-scroll { overflow-x: auto; }
+.data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.data-table th, .data-table td { padding: 9px 12px; text-align: right; white-space: nowrap; }
+.data-table th {
+  color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: .5px;
+  border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--panel); cursor: pointer; user-select: none;
+}
+.data-table th.text, .data-table td.text { text-align: left; }
+.data-table th:hover { color: var(--text-strong); }
+.data-table th .arrow { color: var(--accent); font-size: 9px; }
+.data-table td { border-bottom: 1px solid var(--border); font-family: var(--mono); color: var(--text); }
+.data-table tbody tr { transition: background .12s; }
+.data-table tbody tr:hover { background: var(--panel-2); }
+.data-table tbody tr.clickable { cursor: pointer; }
+.data-table td .ua {
+  display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: bottom; color: var(--muted);
+}
+.data-table td.model, .data-table td.text { font-family: var(--sans); }
+.num-strong { font-weight: 700; color: var(--text-strong); }
+.muted { color: var(--muted-2); }
+
+.pill { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; }
+.pill.ok { background: rgba(111, 149, 118, .14); color: #4d7758; }
+.pill.err { background: rgba(192, 123, 115, .16); color: var(--red-ink); }
+.pill.proto { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); font-weight: 600; }
+.heat { display: inline-block; padding: 1px 8px; border-radius: 6px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+.err-text { color: var(--red-ink); max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+
+.empty-row td { text-align: center; color: var(--muted-2); padding: 30px; font-family: var(--sans); }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--text-strong); color: #faf9f6; padding: 11px 18px; border-radius: 10px; font-size: 13px;
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 100;
+  box-shadow: var(--shadow-pop); border-left: 3px solid var(--red);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ---- Request detail modal ---- */
+.modal { position: fixed; inset: 0; z-index: 200; display: none; }
+.modal.open { display: flex; align-items: flex-start; justify-content: center; padding: 7vh 16px 24px; overflow-y: auto; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(34, 31, 25, .34); backdrop-filter: blur(2px); }
+.modal-dialog {
+  position: relative; width: 100%; max-width: 540px; max-height: 86vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow-pop);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .modal.open .modal-dialog { animation: modal-in .22s cubic-bezier(.2, .7, .3, 1) both; }
+}
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 15px 18px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--panel); border-radius: 14px 14px 0 0; z-index: 1;
+}
+.modal-close {
+  background: transparent; border: 1px solid var(--border); color: var(--muted);
+  width: 28px; height: 28px; border-radius: 8px; cursor: pointer; font-size: 12px; line-height: 1;
+  transition: color .15s, border-color .15s;
+}
+.modal-close:hover { color: var(--text-strong); border-color: var(--border-strong); }
+.modal-body { padding: 6px 18px 18px; }
+.d-sec {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; color: var(--muted-2);
+  margin: 16px 0 4px; padding-bottom: 5px; border-bottom: 1px solid var(--border);
+}
+.d-sec:first-child { margin-top: 8px; }
+.d-row { display: flex; gap: 14px; align-items: baseline; padding: 5px 0; }
+.d-key { flex: none; width: 116px; color: var(--muted); font-size: 12px; }
+.d-val { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-strong); font-variant-numeric: tabular-nums; word-break: break-word; }
+.d-mono { font-family: var(--mono); font-size: 11.5px; color: var(--text); word-break: break-all; }
+.d-arrow { color: var(--muted-2); margin: 0 2px; }
+.d-err {
+  font-family: var(--mono); font-size: 11.5px; color: var(--red-ink); line-height: 1.5;
+  background: rgba(192, 123, 115, .08); border: 1px solid rgba(192, 123, 115, .22);
+  border-radius: 8px; padding: 10px 12px; margin-top: 4px; white-space: pre-wrap; word-break: break-word;
+}
+
+/* ---- Skeletons (first-load placeholders) ---- */
+.skel { position: relative; overflow: hidden; background: var(--panel-2); border-radius: 7px; }
+.skel::after {
+  content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .6), transparent);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+.skel-kpi { gap: 9px; }
+.skel-line { height: 11px; }
+.skel-line.sm { width: 42%; }
+.skel-line.lg { width: 64%; height: 22px; }
+.skel-line.xs { width: 30%; }
+.skel-line.spark-skel { width: 100%; height: 22px; margin-top: auto; border-radius: 6px; }
+
+/* chart placeholders overlay the canvas only while the page is loading */
+.skel-fill { position: absolute; inset: 0; border-radius: 8px; display: none; }
+body.loading .skel-fill { display: block; }
+
+/* ---- Entrance: one quiet, opacity-led reveal, gated by body.intro so reloads
+   (manual / auto / filter changes) never re-animate. A short, shallow stagger —
+   present, not performative. ---- */
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  body.intro .kpis .kpi:not(.skel-kpi),
+  body.intro .card { animation: rise .45s cubic-bezier(.2, .7, .3, 1) both; }
+  body.intro .kpis .kpi:nth-child(2) { animation-delay: .03s; }
+  body.intro .kpis .kpi:nth-child(3) { animation-delay: .05s; }
+  body.intro .kpis .kpi:nth-child(4) { animation-delay: .07s; }
+  body.intro .kpis .kpi:nth-child(5) { animation-delay: .09s; }
+  body.intro .kpis .kpi:nth-child(6) { animation-delay: .11s; }
+  body.intro .kpis .kpi:nth-child(7) { animation-delay: .13s; }
+  body.intro .kpis .kpi:nth-child(8) { animation-delay: .15s; }
+  body.intro .charts .card:nth-child(n+2) { animation-delay: .12s; }
+  body.intro .table-card { animation-delay: .16s; }
+}
+
+/* scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-2); }
+::-webkit-scrollbar-track { background: transparent; }

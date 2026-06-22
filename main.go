@@ -44,9 +44,12 @@ Ops params (environment variables; ./.env is loaded first, real env vars take pr
   APID_TRACE      when truthy (1/true/yes/on), dump TRACE to ./logs (default off)
   APID_DB         SQLite database file path; records request metrics async when set (empty = off)
 
-Metrics API (read-only, only when APID_DB is set; for Grafana's Infinity datasource):
-  GET /stats/daily   per-day, per-upstream-model usage as a flat JSON array.
-                     Params: from/to (Unix ms or RFC3339), tz_offset (day-boundary hour offset).
+Stats (read-only, only when APID_DB is set):
+  GET /stats/        interactive dashboard UI (tokens / models / latency, filterable).
+  GET /stats/daily   per-day, per-upstream-model usage as a flat JSON array (Grafana Infinity).
+  Dashboard JSON API (shared params: from/to as Unix ms or RFC3339, tz_offset hour offset,
+  model & protocol repeatable/comma-separated):
+    /stats/summary /stats/by_model /stats/timeseries /stats/requests /stats/options
 `
 
 // buildVersion reports the module version baked in at build time (set by

@@ -120,6 +120,18 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("GET /stats/daily", s.handleStatsDaily)
+	// Interactive dashboard: JSON API + the embedded UI. The specific /stats/*
+	// API patterns outrank the /stats/ subtree, so only the page falls through
+	// to the file server.
+	mux.HandleFunc("GET /stats/summary", s.handleStatsSummary)
+	mux.HandleFunc("GET /stats/by_model", s.handleStatsByModel)
+	mux.HandleFunc("GET /stats/timeseries", s.handleStatsTimeSeries)
+	mux.HandleFunc("GET /stats/requests", s.handleStatsRequests)
+	mux.HandleFunc("GET /stats/options", s.handleStatsOptions)
+	mux.Handle("GET /stats/", s.statsUIHandler())
+	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/stats/", http.StatusMovedPermanently)
+	})
 	return mux
 }
 
