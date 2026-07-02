@@ -27,6 +27,11 @@ Config uses `[[upstream]]` (backends, referenced by `name`) and `[[route]]`
 (public paths + `model` dispatch rules). Env vars live in `.env` (see
 `.env.example`); full syntax in `config.example.toml`.
 
+To protect the gateway itself, set a top-level `client_api_key` in
+`config.toml`. When set, clients must send it as `Authorization: Bearer ...`,
+`X-Api-Key`, or `Api-Key`. This inbound key is stripped before forwarding; the
+upstream credential remains `[[upstream]].api_key` (Anthropic uses `X-Api-Key`).
+
 ## Docker
 
 ```bash

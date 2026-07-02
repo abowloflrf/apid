@@ -76,3 +76,26 @@ func TestHandleStatsDailyBadParam(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+func TestClientAPIKeyExemptsHealthAndStats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stats.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	srv := New(config.Config{ClientAPIKey: "apid-key"}, st)
+	h := srv.Handler()
+
+	// With client auth on, the health probe and read-only stats/dashboard
+	// endpoints stay open (no key) so the embedded dashboard and Grafana work.
+	for _, path := range []string{"/healthz", "/stats/daily", "/stats/summary", "/stats/"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code == http.StatusUnauthorized {
+			t.Errorf("GET %s should bypass client auth, got 401", path)
+		}
+	}
+}

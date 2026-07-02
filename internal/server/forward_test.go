@@ -184,6 +184,118 @@ func TestForwardAnthropicMessagesNonStream(t *testing.T) {
 	}
 }
 
+func TestClientAPIKeyAuthProtectsForwardRoute(t *testing.T) {
+	var hitUpstream bool
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitUpstream = true
+		if v := r.Header.Get("Authorization"); v != "" {
+			t.Errorf("Authorization leaked upstream: %q", v)
+		}
+		if v := r.Header.Get("X-Api-Key"); v != "" {
+			t.Errorf("X-Api-Key leaked upstream: %q", v)
+		}
+		if v := r.Header.Get("Api-Key"); v != "" {
+			t.Errorf("Api-Key leaked upstream: %q", v)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer up.Close()
+
+	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
+	cfg.ClientAPIKey = "apid-key"
+	srv := New(cfg, nil)
+	defer srv.Close()
+	h := srv.Handler()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet","messages":[]}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing key status = %d, want 401", rec.Code)
+	}
+	if hitUpstream {
+		t.Fatal("upstream should not be hit without client API key")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet","messages":[]}`))
+	req.Header.Set("Authorization", "Bearer apid-key")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorized status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !hitUpstream {
+		t.Fatal("upstream should be hit with valid client API key")
+	}
+}
+
+func TestClientAPIKeyAuthAcceptsAnthropicStyleHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, value string
+	}{
+		{"x api key", "X-Api-Key", "apid-key"},
+		{"api key", "Api-Key", "apid-key"},
+		{"authorization bearer", "Authorization", "Bearer apid-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer up.Close()
+
+			cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
+			cfg.ClientAPIKey = "apid-key"
+			srv := New(cfg, nil)
+			defer srv.Close()
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+				strings.NewReader(`{"model":"claude-sonnet","messages":[]}`))
+			req.Header.Set(tc.header, tc.value)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestClientAPIKeyNotLeakedWhenUpstreamHasConfiguredAnthropicKey(t *testing.T) {
+	var gotAuth, gotXAPIKey, gotAPIKey string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotXAPIKey = r.Header.Get("X-Api-Key")
+		gotAPIKey = r.Header.Get("Api-Key")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer up.Close()
+
+	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
+	cfg.ClientAPIKey = "apid-key"
+	cfg.Upstreams[0].APIKey = "real-anthropic-key"
+	srv := New(cfg, nil)
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"claude-sonnet","messages":[]}`))
+	req.Header.Set("X-Api-Key", "apid-key")
+	req.Header.Set("Authorization", "Bearer should-not-leak")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if gotXAPIKey != "real-anthropic-key" {
+		t.Errorf("upstream X-Api-Key = %q, want configured upstream key", gotXAPIKey)
+	}
+	if gotAuth != "" || gotAPIKey != "" {
+		t.Errorf("client auth leaked upstream: Authorization=%q Api-Key=%q", gotAuth, gotAPIKey)
+	}
+}
+
 func TestForwardRawPreservesQuery(t *testing.T) {
 	var gotRawQuery string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

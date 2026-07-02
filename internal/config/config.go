@@ -25,11 +25,12 @@ const (
 )
 
 type Config struct {
-	Listen    string // APID_LISTEN
-	TraceDir  string // APID_TRACE_DIR / APID_TRACE; empty = off
-	DB        string // APID_DB; empty = off
-	Upstreams []Upstream
-	Routes    []Route
+	Listen       string // APID_LISTEN
+	TraceDir     string // APID_TRACE_DIR / APID_TRACE; empty = off
+	DB           string // APID_DB; empty = off
+	ClientAPIKey string // client_api_key in TOML; empty = no inbound client auth
+	Upstreams    []Upstream
+	Routes       []Route
 }
 
 // Upstream is a backend deployment, referenced by Name from any number of routes
@@ -39,7 +40,7 @@ type Upstream struct {
 	Protocol Protocol `toml:"protocol"`
 	BaseURL  string   `toml:"base_url"`
 	Path     string   `toml:"path"`
-	APIKey   string   `toml:"api_key"` // empty = pass through client Authorization
+	APIKey   string   `toml:"api_key"` // empty = pass through client auth unless client_api_key is enabled
 	Model    string   `toml:"model"`   // empty = pass through client model
 }
 
@@ -117,8 +118,9 @@ func globMatch(pattern, s string) bool {
 }
 
 type fileConfig struct {
-	Upstreams []Upstream `toml:"upstream"`
-	Routes    []Route    `toml:"route"`
+	ClientAPIKey string     `toml:"client_api_key"`
+	Upstreams    []Upstream `toml:"upstream"`
+	Routes       []Route    `toml:"route"`
 }
 
 // Load reads ops params from env and upstreams/routes from the TOML file at
@@ -136,37 +138,46 @@ func Load(configPath string) (Config, error) {
 		traceDir = "./logs"
 	}
 
-	upstreams, routes, err := loadFile(configPath)
+	fc, err := loadFullFile(configPath)
 	if err != nil {
 		return Config{}, err
 	}
 
 	return Config{
-		Listen:    env("APID_LISTEN", ":19092"),
-		TraceDir:  traceDir,
-		DB:        env("APID_DB", ""),
-		Upstreams: upstreams,
-		Routes:    routes,
+		Listen:       env("APID_LISTEN", ":19092"),
+		TraceDir:     traceDir,
+		DB:           env("APID_DB", ""),
+		ClientAPIKey: fc.ClientAPIKey,
+		Upstreams:    fc.Upstreams,
+		Routes:       fc.Routes,
 	}, nil
 }
 
 func loadFile(path string) ([]Upstream, []Route, error) {
+	fc, err := loadFullFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fc.Upstreams, fc.Routes, nil
+}
+
+func loadFullFile(path string) (fileConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config: read %q failed (set --config): %w", path, err)
+		return fileConfig{}, fmt.Errorf("config: read %q failed (set --config): %w", path, err)
 	}
 	var fc fileConfig
 	md, err := toml.Decode(string(data), &fc)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config: parse %q failed: %w", path, err)
+		return fileConfig{}, fmt.Errorf("config: parse %q failed: %w", path, err)
 	}
 	if undec := md.Undecoded(); len(undec) > 0 {
-		return nil, nil, fmt.Errorf("config: %q has unknown keys: %v", path, undec)
+		return fileConfig{}, fmt.Errorf("config: %q has unknown keys: %v", path, undec)
 	}
 	if err := validateConfig(fc.Upstreams, fc.Routes); err != nil {
-		return nil, nil, err
+		return fileConfig{}, err
 	}
-	return fc.Upstreams, fc.Routes, nil
+	return fc, nil
 }
 
 func validateConfig(upstreams []Upstream, routes []Route) error {

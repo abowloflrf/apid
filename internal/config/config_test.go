@@ -19,6 +19,8 @@ func writeTOML(t *testing.T, content string) string {
 
 func TestLoadFileValid(t *testing.T) {
 	path := writeTOML(t, `
+client_api_key = "apid-client-key"
+
 [[upstream]]
 name = "deepseek"
 protocol = "openai_chat_completions"
@@ -63,6 +65,14 @@ input_protocol = "openai_chat_completions"
 	}
 	if len(routes[0].Models) != 2 {
 		t.Errorf("route[0] should have 2 model rules, got %d", len(routes[0].Models))
+	}
+
+	fc, err := loadFullFile(path)
+	if err != nil {
+		t.Fatalf("loadFullFile failed: %v", err)
+	}
+	if fc.ClientAPIKey != "apid-client-key" {
+		t.Errorf("ClientAPIKey = %q, want apid-client-key", fc.ClientAPIKey)
 	}
 }
 
@@ -402,8 +412,22 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DB != "" || cfg.TraceDir != "" {
 		t.Errorf("DB=%q TraceDir=%q, want both empty", cfg.DB, cfg.TraceDir)
 	}
+	if cfg.ClientAPIKey != "" {
+		t.Errorf("ClientAPIKey = %q, want empty", cfg.ClientAPIKey)
+	}
 	if len(cfg.Upstreams) != 1 || len(cfg.Routes) != 1 {
 		t.Errorf("got %d upstreams, %d routes; want 1/1", len(cfg.Upstreams), len(cfg.Routes))
+	}
+}
+
+func TestLoadClientAPIKeyFromConfig(t *testing.T) {
+	isolateEnv(t)
+	cfg, err := Load(writeTOML(t, `client_api_key = "local-key"`+minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ClientAPIKey != "local-key" {
+		t.Errorf("ClientAPIKey = %q, want local-key", cfg.ClientAPIKey)
 	}
 }
 

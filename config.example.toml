@@ -11,6 +11,12 @@
 # upstream's protocol (currently only openai_responses -> openai_chat_completions).
 # Equal protocols = pure forward (bytes passed through, metrics still collected).
 # Protocols: openai_responses, openai_chat_completions, anthropic_messages.
+#
+# Optional inbound client auth for apid itself. Empty/omitted = disabled.
+# When set, clients must present this key as Authorization: Bearer <key>,
+# X-Api-Key: <key>, or Api-Key: <key>. This key is never forwarded upstream.
+# Only forwarding routes require it; /healthz and /stats(/*) stay open.
+# client_api_key = "apid-local-static-key"
 
 # ── Upstreams: write each backend once, reuse from any entrypoint. ──
 [[upstream]]

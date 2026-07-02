@@ -32,6 +32,7 @@ Usage:
   apid --version          print the version and exit
 
 Forwarding config (a TOML file at --config, default ./config.toml; missing file = startup failure):
+  client_api_key optional static key for clients calling apid (empty/omitted = disabled)
   [[upstream]]  a backend, reused by name: name / protocol / base_url / path / api_key / model
   [[route]]     an entrypoint, dispatched by request model: path / input_protocol / [[route.model]]{match, upstream}
   Protocols: openai_responses, openai_chat_completions, anthropic_messages.

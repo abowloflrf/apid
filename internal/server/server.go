@@ -4,12 +4,14 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/abowloflrf/apid/internal/config"
@@ -41,6 +43,7 @@ type Server struct {
 	recorder  *stats.Recorder
 	db        *sql.DB          // read-only handle for the stats query API; nil when storage is off
 	reasoning *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
+	apiKey    string           // optional inbound client API key; empty = no client auth
 }
 
 // New builds a Server. st may be nil (stats disabled). Each upstream gets one
@@ -68,6 +71,7 @@ func New(cfg config.Config, st *store.Store) *Server {
 		recorder:  stats.NewRecorder(st, 0),
 		db:        db,
 		reasoning: reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
+		apiKey:    cfg.ClientAPIKey,
 	}
 }
 
@@ -132,7 +136,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/stats/", http.StatusMovedPermanently)
 	})
-	return mux
+	return s.withClientAuth(mux)
 }
 
 // handleRoute is the shared orchestration: read body, sniff model, resolve the
@@ -160,6 +164,12 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 			rec.statusCode(), time.Since(start).Round(time.Millisecond),
 			usagePresent, inputTok, outputTok, totalTok, cacheReadTok, cacheCreateTok)
 	}()
+
+	upstreamReq := r
+	if s.apiKey != "" {
+		upstreamReq = r.Clone(r.Context())
+		upstreamReq.Header = upstreamClientHeaders(r.Header)
+	}
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -197,10 +207,107 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 
 	// Same protocol on both ends => raw forward; otherwise convert.
 	if rt.cfg.InputProtocol == tg.cfg.Protocol {
-		s.forwardRaw(tg, effModel, rec, r, bodyBytes, traceEntry, &stat, start)
+		s.forwardRaw(tg, effModel, rec, upstreamReq, bodyBytes, traceEntry, &stat, start)
 		return
 	}
-	s.convertResponsesToChat(tg, effModel, rec, r, bodyBytes, traceEntry, &stat, start)
+	s.convertResponsesToChat(tg, effModel, rec, upstreamReq, bodyBytes, traceEntry, &stat, start)
+}
+
+func (s *Server) authorizeClient(w http.ResponseWriter, r *http.Request) bool {
+	if s.apiKey == "" {
+		return true
+	}
+	if clientKeyMatches(r.Header, s.apiKey) {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="apid"`)
+	writeError(w, http.StatusUnauthorized, "invalid or missing API key")
+	return false
+}
+
+func (s *Server) withClientAuth(next http.Handler) http.Handler {
+	if s.apiKey == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authExemptPath(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !s.authorizeClient(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authExemptPath reports whether a request bypasses client auth: the health
+// probe and the read-only stats/dashboard endpoints (GET /stats and /stats/*),
+// so the embedded dashboard and Grafana keep working. Only the forwarding
+// routes (POST) require the client key.
+func authExemptPath(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	p := r.URL.Path
+	return p == "/healthz" || p == "/stats" || strings.HasPrefix(p, "/stats/")
+}
+
+// clientKeyMatches accepts the common API-key header styles used by OpenAI-like
+// and Anthropic clients: Authorization: Bearer <key>, X-Api-Key, and Api-Key.
+func clientKeyMatches(h http.Header, want string) bool {
+	if want == "" {
+		return true
+	}
+	for _, got := range clientAPIKeyCandidates(h) {
+		if constantTimeStringEqual(got, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func clientAPIKeyCandidates(h http.Header) []string {
+	var out []string
+	for _, v := range h.Values("Authorization") {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if len(v) >= 7 && strings.EqualFold(v[:7], "Bearer ") {
+			if token := strings.TrimSpace(v[7:]); token != "" {
+				out = append(out, token)
+			}
+			continue
+		}
+		out = append(out, v)
+	}
+	for _, key := range []string{"X-Api-Key", "Api-Key"} {
+		for _, v := range h.Values(key) {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func constantTimeStringEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// upstreamClientHeaders removes the credentials that authenticated the client
+// to apid before the request is sent upstream. This prevents an apid-level key
+// from becoming an accidental upstream key when an upstream.api_key is omitted.
+func upstreamClientHeaders(src http.Header) http.Header {
+	dst := src.Clone()
+	for _, key := range []string{"Authorization", "Proxy-Authorization", "X-Api-Key", "Api-Key"} {
+		dst.Del(key)
+	}
+	return dst
 }
 
 // convertResponsesToChat handles a responses -> chat route.
