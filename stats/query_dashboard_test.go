@@ -19,7 +19,7 @@ func seedDashboard(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	r := NewRecorder(st, 16)
+	r := NewRecorder(st, 16, nil)
 	day1 := time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)
 	day2 := time.Date(2025, 3, 2, 10, 0, 0, 0, time.UTC)
 
@@ -193,7 +193,7 @@ func TestQueryTimeSeriesSubHour(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	r := NewRecorder(st, 16)
+	r := NewRecorder(st, 16, nil)
 	base := time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)
 	for _, min := range []int{2, 7, 16} {
 		r.Record(Record{

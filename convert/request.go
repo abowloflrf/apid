@@ -4,7 +4,7 @@ package convert
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/abowloflrf/apid/protocol"
@@ -96,7 +96,8 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 					namespaces[flat] = NamespacedTool{Namespace: prefix, Name: t.Name}
 				}
 			default:
-				log.Printf("skipping unsupported tool type: %q", t.Type)
+				// convert has no injected logger; the process default is set in main.
+				slog.Warn("skipping unsupported tool type", "type", t.Type)
 			}
 		}
 	}
@@ -178,7 +179,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 	var items []protocol.InputItem
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, fmt.Errorf("无法解析 input 字段: %w", err)
+		return nil, fmt.Errorf("parse input: %w", err)
 	}
 
 	out := make([]protocol.ChatMessage, 0, len(items))

@@ -49,7 +49,7 @@ func TestForwardChatNonStream(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "f.db")
 	st, _ := store.Open(dbPath)
 	defer st.Close()
-	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st)
+	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st, nil)
 	defer srv.Close()
 
 	reqBody := `{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}`
@@ -106,7 +106,7 @@ func TestForwardResponsesNonStream(t *testing.T) {
 
 	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
 	defer st.Close()
-	srv := New(forwardConfig("/v1/responses", config.ProtoResponses, up.URL, "/v1/responses", ""), st)
+	srv := New(forwardConfig("/v1/responses", config.ProtoResponses, up.URL, "/v1/responses", ""), st, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses",
@@ -146,7 +146,7 @@ func TestForwardAnthropicMessagesNonStream(t *testing.T) {
 	defer st.Close()
 	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
 	cfg.Upstreams[0].APIKey = "sk-ant-test"
-	srv := New(cfg, st)
+	srv := New(cfg, st, nil)
 	defer srv.Close()
 
 	reqBody := `{"model":"claude-sonnet","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
@@ -203,7 +203,7 @@ func TestClientAPIKeyAuthProtectsForwardRoute(t *testing.T) {
 
 	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
 	cfg.ClientAPIKey = "apid-key"
-	srv := New(cfg, nil)
+	srv := New(cfg, nil, nil)
 	defer srv.Close()
 	h := srv.Handler()
 
@@ -247,7 +247,7 @@ func TestClientAPIKeyAuthAcceptsAnthropicStyleHeaders(t *testing.T) {
 
 			cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
 			cfg.ClientAPIKey = "apid-key"
-			srv := New(cfg, nil)
+			srv := New(cfg, nil, nil)
 			defer srv.Close()
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/messages",
@@ -275,7 +275,7 @@ func TestClientAPIKeyNotLeakedWhenUpstreamHasConfiguredAnthropicKey(t *testing.T
 	cfg := forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", "")
 	cfg.ClientAPIKey = "apid-key"
 	cfg.Upstreams[0].APIKey = "real-anthropic-key"
-	srv := New(cfg, nil)
+	srv := New(cfg, nil, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
@@ -307,7 +307,7 @@ func TestForwardRawPreservesQuery(t *testing.T) {
 
 	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
 	defer st.Close()
-	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st)
+	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true&x=1",
@@ -352,7 +352,7 @@ func TestForwardChatStream(t *testing.T) {
 
 	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
 	defer st.Close()
-	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st)
+	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -410,7 +410,7 @@ data: {"type":"message_delta","usage":{"output_tokens":3}}
 
 	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
 	defer st.Close()
-	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st)
+	srv := New(forwardConfig("/v1/messages", config.ProtoAnthropic, up.URL, "/v1/messages", ""), st, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
@@ -454,7 +454,7 @@ func TestForwardModelOverride(t *testing.T) {
 	}))
 	defer up.Close()
 
-	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", "backend-model"), nil)
+	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", "backend-model"), nil, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -477,7 +477,7 @@ func TestForwardUpstreamError(t *testing.T) {
 
 	st, _ := store.Open(filepath.Join(t.TempDir(), "f.db"))
 	defer st.Close()
-	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st)
+	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), st, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
@@ -527,7 +527,7 @@ func TestRouteByPath(t *testing.T) {
 			{Path: "/a/chat", InputProtocol: config.ProtoChat, Models: []config.ModelRule{{Match: "*", Upstream: "a"}}},
 			{Path: "/b/chat", InputProtocol: config.ProtoChat, Models: []config.ModelRule{{Match: "*", Upstream: "b"}}},
 		},
-	}, nil)
+	}, nil, nil)
 	defer srv.Close()
 	h := srv.Handler()
 
@@ -575,7 +575,7 @@ func TestRouteByModel(t *testing.T) {
 				{Match: "b-*", Upstream: "b"},
 			},
 		}},
-	}, nil)
+	}, nil, nil)
 	defer srv.Close()
 	h := srv.Handler()
 
@@ -662,7 +662,7 @@ func TestForwardErrorContentType(t *testing.T) {
 	}))
 	defer up.Close()
 
-	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), nil)
+	srv := New(forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", ""), nil, nil)
 	defer srv.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",

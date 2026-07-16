@@ -73,7 +73,7 @@ func convertRoute(upstreamURL, model string) config.Config {
 }
 
 func newTestServer(upstreamURL string) http.Handler {
-	return New(convertRoute(upstreamURL, ""), nil).Handler()
+	return New(convertRoute(upstreamURL, ""), nil, nil).Handler()
 }
 
 func TestNonStreaming(t *testing.T) {
@@ -121,7 +121,7 @@ func TestUpstreamModelOverride(t *testing.T) {
 	}))
 	defer up.Close()
 
-	h := New(convertRoute(up.URL, "real-backend-model"), nil).Handler()
+	h := New(convertRoute(up.URL, "real-backend-model"), nil, nil).Handler()
 
 	body := `{"model":"gpt-x","input":"你好"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -174,7 +174,7 @@ func TestRuleModelOverride(t *testing.T) {
 	ruleModel := "rule-level-model"
 	cfg := convertRoute(up.URL, "upstream-default")
 	cfg.Routes[0].Models[0].Model = &ruleModel // rule override should win
-	h := New(cfg, nil).Handler()
+	h := New(cfg, nil, nil).Handler()
 
 	body := `{"model":"gpt-x","input":"你好"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -206,7 +206,7 @@ func TestRuleModelPassthrough(t *testing.T) {
 	passthrough := ""
 	cfg := convertRoute(up.URL, "upstream-default")
 	cfg.Routes[0].Models[0].Model = &passthrough // explicit passthrough beats upstream default
-	h := New(cfg, nil).Handler()
+	h := New(cfg, nil, nil).Handler()
 
 	body := `{"model":"gpt-x","input":"你好"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
@@ -279,7 +279,7 @@ func TestStatsRecorded(t *testing.T) {
 	}
 	defer st.Close()
 
-	srv := New(convertRoute(up.URL, ""), st)
+	srv := New(convertRoute(up.URL, ""), st, nil)
 	defer srv.Close()
 
 	body := `{"model":"gpt-x","input":"你好"}`
@@ -346,7 +346,7 @@ func TestStatsUpstreamError(t *testing.T) {
 	}
 	defer st.Close()
 
-	srv := New(convertRoute(up.URL, ""), st)
+	srv := New(convertRoute(up.URL, ""), st, nil)
 	defer srv.Close()
 
 	body := `{"model":"m","input":"hi"}`

@@ -8,7 +8,7 @@ package trace
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -18,21 +18,26 @@ import (
 // Tracer 把请求落盘到 dir。dir 为空表示禁用。
 type Tracer struct {
 	dir string
+	log *slog.Logger
 	seq atomic.Uint64
 }
 
 // New 创建 Tracer。dir 为空则返回一个禁用的 Tracer；
 // 非空时确保目录存在，创建失败则降级为禁用并打日志。
-func New(dir string) *Tracer {
+// logger 为 nil 时回退到 slog.Default()。
+func New(dir string, logger *slog.Logger) *Tracer {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if dir == "" {
-		return &Tracer{}
+		return &Tracer{log: logger}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("trace: failed to create dir %q, tracing disabled: %v", dir, err)
-		return &Tracer{}
+		logger.Warn("trace dir create failed, tracing disabled", "dir", dir, "err", err)
+		return &Tracer{log: logger}
 	}
-	log.Printf("trace enabled: writing request bodies to %s", dir)
-	return &Tracer{dir: dir}
+	logger.Info("trace enabled", "dir", dir)
+	return &Tracer{dir: dir, log: logger}
 }
 
 // Enabled 表示当前 Tracer 是否会落盘。
@@ -98,11 +103,11 @@ func (e *Entry) Dump(kind string, body []byte) string {
 
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
-		log.Printf("trace: failed to marshal record: %v", err)
+		e.t.log.Warn("trace marshal record failed", "err", err)
 		return ""
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		log.Printf("trace: failed to write %s: %v", path, err)
+		e.t.log.Warn("trace write failed", "path", path, "err", err)
 		return ""
 	}
 	return path

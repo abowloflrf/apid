@@ -558,8 +558,8 @@ func TestStreamUpstreamError(t *testing.T) {
 	raw := "data: " + `{"choices":[{"delta":{"content":"开头"}}]}` + "\n\n" +
 		"data: " + `{"error":{"message":"upstream blew up","type":"server_error"}}` + "\n\n"
 	var s sink
-	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
-		t.Fatal(err)
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err == nil {
+		t.Fatal("upstream stream error should be returned to the caller for logging/stats")
 	}
 	out := s.b.String()
 	if !strings.Contains(out, "event: response.failed") {

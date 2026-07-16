@@ -16,7 +16,7 @@ func TestRecorderRoundTrip(t *testing.T) {
 	}
 	defer st.Close()
 
-	r := NewRecorder(st, 16)
+	r := NewRecorder(st, 16, nil)
 	if r == nil {
 		t.Fatal("expected non-nil recorder")
 	}
@@ -101,14 +101,14 @@ func TestRecorderNilSafe(t *testing.T) {
 func TestRecorderDisabled(t *testing.T) {
 	// store 未启用时 NewRecorder 返回 nil。
 	var st *store.Store
-	if r := NewRecorder(st, 0); r != nil {
+	if r := NewRecorder(st, 0, nil); r != nil {
 		t.Errorf("expected nil recorder for nil store")
 	}
 	enabled, err := store.Open("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r := NewRecorder(enabled, 0); r != nil {
+	if r := NewRecorder(enabled, 0, nil); r != nil {
 		t.Errorf("expected nil recorder for disabled store, got %+v", r)
 	}
 }
@@ -118,7 +118,7 @@ func TestRecorderEmptyError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.db")
 	st, _ := store.Open(path)
 	defer st.Close()
-	r := NewRecorder(st, 0)
+	r := NewRecorder(st, 0, nil)
 	r.Record(Record{
 		Time: time.Now(), ClientProtocol: "openai_responses", ClientPath: "/x", ClientModel: "m",
 		ClientStatus: 200, UpstreamProtocol: "openai_chat_completions", UpstreamURL: "u", UpstreamModel: "m",

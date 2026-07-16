@@ -22,7 +22,7 @@ func seedServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { st.Close() })
 
-	r := stats.NewRecorder(st, 16)
+	r := stats.NewRecorder(st, 16, nil)
 	now := time.Now().UTC()
 	r.Record(stats.Record{
 		Time: now, Duration: 200 * time.Millisecond, TTFT: 40 * time.Millisecond,
@@ -39,7 +39,7 @@ func seedServer(t *testing.T) *Server {
 	})
 	r.Close()
 
-	return New(config.Config{}, st)
+	return New(config.Config{}, st, nil)
 }
 
 func TestDashboardSummary(t *testing.T) {
@@ -133,7 +133,7 @@ func TestDashboardRoutingPrecedence(t *testing.T) {
 }
 
 func TestDashboardDisabled(t *testing.T) {
-	srv := New(config.Config{}, nil) // storage off
+	srv := New(config.Config{}, nil, nil) // storage off
 	for _, p := range []string{"/stats/summary", "/stats/by_model", "/stats/timeseries", "/stats/requests", "/stats/options", "/stats/"} {
 		w := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(w, httptest.NewRequest("GET", p, nil))

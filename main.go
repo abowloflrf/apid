@@ -3,11 +3,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -73,64 +73,76 @@ func main() {
 		return
 	}
 
-	cfg, err := config.Load(*configPath)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// Packages without an injected logger (e.g. convert) fall back to the default.
+	slog.SetDefault(logger)
+
+	if err := run(logger, *configPath); err != nil {
+		logger.Error("apid exited", "err", err)
+		os.Exit(1)
+	}
+}
+
+// run wires everything together and blocks until shutdown completes. Exit
+// ordering matters: Shutdown drains in-flight requests (so every handler has
+// enqueued its metrics), then srv.Close drains the stats channel, and only
+// then does the SQLite store close.
+func run(logger *slog.Logger, configPath string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("config load failed: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
-	// 通用 SQLite 存储。cfg.DB 为空时 store.Open 返回 (nil, nil)，
-	// 表示不启用，server 里所有持久化调用 nil-check 后跳过。
+	// Shared SQLite storage. With cfg.DB empty, store.Open returns (nil, nil)
+	// meaning disabled; every persistence call downstream is nil-safe.
 	st, err := store.Open(cfg.DB)
 	if err != nil {
-		log.Fatalf("store open failed: %v", err)
+		return fmt.Errorf("open store: %w", err)
+	}
+	if st.Enabled() {
+		logger.Info("store enabled", "db", st.Path())
 	}
 
-	srv := server.New(cfg, st)
-
+	srv := server.New(cfg, st, logger)
 	httpServer := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: srv.Handler(),
 	}
 
-	// 监听退出信号，优雅关闭。Shutdown 会先关 listener（让 ListenAndServe 立即
-	// 返回），再阻塞等待 in-flight 请求跑完；只有它返回后所有 handler 的指标才都已
-	// 入队，关 stats channel 才安全。用 idleClosed 把这个时序同步给主 goroutine。
-	idleClosed := make(chan struct{})
-	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
-		log.Println("shutdown signal received, stopping server...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpServer.Shutdown(ctx)
-		close(idleClosed)
-	}()
+	errCh := make(chan error, 1)
+	go func() { errCh <- httpServer.ListenAndServe() }()
 
-	log.Printf("apid started: listening on %s, %d upstream(s), %d route(s)",
-		cfg.Listen, len(cfg.Upstreams), len(cfg.Routes))
+	logger.Info("apid started", "listen", cfg.Listen,
+		"upstreams", len(cfg.Upstreams), "routes", len(cfg.Routes))
 	for _, u := range cfg.Upstreams {
-		log.Printf("  upstream %q -> %s%s [%s]", u.Name, u.BaseURL, u.Path, u.Protocol)
+		logger.Info("upstream", "name", u.Name, "endpoint", u.BaseURL+u.Path, "protocol", u.Protocol)
 	}
 	for _, rt := range cfg.Routes {
 		for _, m := range rt.Models {
-			match := m.Match
-			if match == "" {
-				match = "*"
-			}
-			log.Printf("  route %s [%s] model %q -> upstream %q",
-				rt.Path, rt.InputProtocol, match, m.Upstream)
+			logger.Info("route", "path", rt.Path, "protocol", rt.InputProtocol,
+				"match", cmp.Or(m.Match, "*"), "upstream", m.Upstream)
 		}
 	}
-	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server exited unexpectedly: %v", err)
+
+	select {
+	case err := <-errCh:
+		srv.Close()
+		_ = st.Close()
+		return fmt.Errorf("http server: %w", err)
+	case <-ctx.Done():
+		logger.Info("shutdown signal received, stopping server")
 	}
-	// 等 Shutdown 真正排空 in-flight 请求（它们的指标此时已全部入队），
-	// 再排空 stats channel、最后关 SQLite，指标就不会丢、也不会向已关闭 channel 发送。
-	<-idleClosed
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpServer.Shutdown(shutdownCtx)
 	srv.Close()
 	if err := st.Close(); err != nil {
-		log.Printf("store close: %v", err)
+		logger.Warn("store close", "err", err)
 	}
-	log.Println("server stopped")
+	logger.Info("server stopped")
+	return nil
 }

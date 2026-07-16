@@ -4,7 +4,6 @@ import (
 	"embed"
 	"encoding/json"
 	"io/fs"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -56,10 +55,7 @@ func (s *Server) handleStatsDaily(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(rows); err != nil {
-		log.Printf("stats: failed to write response: %v", err)
-	}
+	s.writeJSON(w, rows)
 }
 
 // parseTimeParam accepts a Unix-millisecond timestamp (what Grafana's
@@ -139,7 +135,7 @@ func (s *Server) handleStatsSummary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	writeJSON(w, m)
+	s.writeJSON(w, m)
 }
 
 func (s *Server) handleStatsByModel(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +148,7 @@ func (s *Server) handleStatsByModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	writeJSON(w, rows)
+	s.writeJSON(w, rows)
 }
 
 func (s *Server) handleStatsTimeSeries(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +161,7 @@ func (s *Server) handleStatsTimeSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	writeJSON(w, rows)
+	s.writeJSON(w, rows)
 }
 
 func (s *Server) handleStatsRequests(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +178,7 @@ func (s *Server) handleStatsRequests(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	writeJSON(w, rows)
+	s.writeJSON(w, rows)
 }
 
 func (s *Server) handleStatsOptions(w http.ResponseWriter, _ *http.Request) {
@@ -195,7 +191,7 @@ func (s *Server) handleStatsOptions(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
-	writeJSON(w, opts)
+	s.writeJSON(w, opts)
 }
 
 // statsFilter parses the shared filter and guards on storage being enabled,
@@ -219,7 +215,7 @@ func (s *Server) statsUIHandler() http.Handler {
 	sub, err := fs.Sub(webuiFS, "webui")
 	if err != nil {
 		// Embed paths are compile-time constants, so this never fails in practice.
-		log.Printf("stats: webui sub-fs failed: %v", err)
+		s.log.Error("stats webui sub-fs failed", "err", err)
 		sub = webuiFS
 	}
 	fileServer := http.StripPrefix("/stats/", http.FileServerFS(sub))
@@ -240,9 +236,9 @@ func isTruthy(s string) bool {
 	return false
 }
 
-func writeJSON(w http.ResponseWriter, v any) {
+func (s *Server) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("stats: failed to write response: %v", err)
+		s.log.Warn("write response failed", "err", err)
 	}
 }

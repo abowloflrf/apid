@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"strconv"
 	"strings"
 	"time"
@@ -77,10 +76,12 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		if data == "[DONE]" {
 			break
 		}
+		// Upstream reported an error mid-stream: emit response.failed to the
+		// client and surface the error to the caller for logging/stats.
 		if msg := parseStreamError(data); msg != "" {
-			log.Printf("upstream stream error: %s", msg)
 			st.fail(msg)
-			return &StreamResult{}, nil
+			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt},
+				fmt.Errorf("upstream stream error: %s", msg)
 		}
 		var chunk protocol.ChatStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -88,12 +89,6 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		}
 		if chunk.Usage != nil {
 			st.usage = chunk.Usage
-			cached := 0
-			if d := chunk.Usage.PromptTokensDetails; d != nil {
-				cached = d.CachedTokens
-			}
-			log.Printf("stream usage: prompt_tokens=%d completion_tokens=%d total_tokens=%d cached_tokens=%d",
-				chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens, cached)
 		}
 		if len(chunk.Choices) == 0 {
 			continue

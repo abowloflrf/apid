@@ -114,7 +114,7 @@ func (c *Client) ForwardWithQuery(ctx context.Context, body []byte, clientHeader
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("请求上游失败: %w", err)
+		return nil, fmt.Errorf("upstream request: %w", err)
 	}
 	return resp, nil
 }

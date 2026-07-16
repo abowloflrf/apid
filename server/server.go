@@ -8,7 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,6 +39,7 @@ type target struct {
 type Server struct {
 	routes    map[string]*route
 	upstreams map[string]*target
+	log       *slog.Logger
 	tracer    *trace.Tracer
 	recorder  *stats.Recorder
 	db        *sql.DB          // read-only handle for the stats query API; nil when storage is off
@@ -46,9 +47,13 @@ type Server struct {
 	apiKey    string           // optional inbound client API key; empty = no client auth
 }
 
-// New builds a Server. st may be nil (stats disabled). Each upstream gets one
-// shared client; tracer/recorder are global.
-func New(cfg config.Config, st *store.Store) *Server {
+// New builds a Server. st may be nil (stats disabled); a nil logger falls back
+// to slog.Default(). Each upstream gets one shared client; tracer/recorder are
+// global.
+func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	upstreams := make(map[string]*target, len(cfg.Upstreams))
 	for _, uc := range cfg.Upstreams {
 		upstreams[uc.Name] = &target{
@@ -67,8 +72,9 @@ func New(cfg config.Config, st *store.Store) *Server {
 	return &Server{
 		routes:    routes,
 		upstreams: upstreams,
-		tracer:    trace.New(cfg.TraceDir),
-		recorder:  stats.NewRecorder(st, 0),
+		log:       logger,
+		tracer:    trace.New(cfg.TraceDir, logger),
+		recorder:  stats.NewRecorder(st, 0, logger),
 		db:        db,
 		reasoning: reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
 		apiKey:    cfg.ClientAPIKey,
@@ -80,13 +86,6 @@ func upstreamOptions(proto config.Protocol) []upstream.Option {
 		return []upstream.Option{upstream.WithXAPIKeyAuth()}
 	}
 	return nil
-}
-
-func usageLogFields(u *stats.Usage) (present bool, inputTokens, outputTokens, totalTokens, cacheReadTokens, cacheCreationTokens int) {
-	if u == nil {
-		return false, 0, 0, 0, 0, 0
-	}
-	return true, u.InputTokens, u.OutputTokens, u.TotalTokens, u.CachedTokens, u.CacheCreationTokens
 }
 
 func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
@@ -157,12 +156,19 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 		s.recorder.Record(stat)
 	}()
 	defer func() {
-		usagePresent, inputTok, outputTok, totalTok, cacheReadTok, cacheCreateTok := usageLogFields(stat.Usage)
-		log.Printf("access method=%s path=%s model=%q stream=%t upstream_url=%q upstream_model=%q upstream_status=%d status=%d duration=%s usage_present=%t usage_input_tokens=%d usage_output_tokens=%d usage_total_tokens=%d usage_cache_read_tokens=%d usage_cache_creation_tokens=%d",
-			r.Method, r.URL.Path, stat.ClientModel, stat.Stream,
-			stat.UpstreamURL, stat.UpstreamModel, stat.UpstreamStatus,
-			rec.statusCode(), time.Since(start).Round(time.Millisecond),
-			usagePresent, inputTok, outputTok, totalTok, cacheReadTok, cacheCreateTok)
+		attrs := []any{
+			"method", r.Method, "path", r.URL.Path,
+			"model", stat.ClientModel, "stream", stat.Stream,
+			"upstream_url", stat.UpstreamURL, "upstream_model", stat.UpstreamModel,
+			"upstream_status", stat.UpstreamStatus, "status", rec.statusCode(),
+			"duration", time.Since(start).Round(time.Millisecond),
+		}
+		if u := stat.Usage; u != nil {
+			attrs = append(attrs, slog.Group("usage",
+				"input", u.InputTokens, "output", u.OutputTokens, "total", u.TotalTokens,
+				"cache_read", u.CachedTokens, "cache_creation", u.CacheCreationTokens))
+		}
+		s.log.Info("access", attrs...)
 	}()
 
 	upstreamReq := r
@@ -202,7 +208,7 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 
 	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
 	if path := traceEntry.Dump(string(rt.cfg.InputProtocol), bodyBytes); path != "" {
-		log.Printf("trace request -> %s", path)
+		s.log.Info("trace request", "file", path)
 	}
 
 	// Same protocol on both ends => raw forward; otherwise convert.
@@ -337,9 +343,9 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 
 	if traceEntry != nil {
 		if chatBytes, err := json.Marshal(chatReq); err != nil {
-			log.Printf("trace: failed to marshal chat request: %v", err)
+			s.log.Error("trace marshal chat request failed", "err", err)
 		} else if path := traceEntry.Dump("chat", chatBytes); path != "" {
-			log.Printf("trace chat request -> %s", path)
+			s.log.Info("trace chat request", "file", path)
 		}
 	}
 
@@ -353,7 +359,7 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 	stat.UpstreamStatus = resp.StatusCode
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		passUpstreamError(w, resp, stat)
+		s.passUpstreamError(w, resp, stat)
 		return
 	}
 
@@ -385,7 +391,7 @@ func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces 
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(out); err != nil {
-		log.Printf("failed to write response: %v", err)
+		s.log.Warn("write response failed", "err", err)
 	}
 }
 
@@ -407,7 +413,7 @@ func (s *Server) streamResponse(ctx context.Context, w http.ResponseWriter, body
 	sw := &sseWriter{w: w, f: flusher}
 	result, err := convert.StreamChatToResponses(ctx, sw, body, model, namespaces)
 	if err != nil {
-		log.Printf("stream conversion error: %v", err)
+		s.log.Warn("stream conversion failed", "err", err)
 		stat.Error = "stream conversion: " + err.Error()
 	}
 	if result != nil {
@@ -450,9 +456,9 @@ func toolCallIDs(calls []protocol.ChatToolCall) []string {
 
 // ---- 通用辅助 ----
 
-func passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
+func (s *Server) passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
 	errBody, _ := io.ReadAll(resp.Body)
-	log.Printf("upstream error status=%d body=%s", resp.StatusCode, errBody)
+	s.log.Warn("upstream error", "status", resp.StatusCode, "body", string(errBody))
 	stat.Error = truncate(string(errBody), 512)
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)

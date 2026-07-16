@@ -6,7 +6,7 @@ package stats
 
 import (
 	"database/sql"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -59,6 +59,7 @@ type Usage struct {
 // 所有方法对 nil 接收者安全，业务方可放心 nil-check 后跳过。
 type Recorder struct {
 	db        *sql.DB
+	log       *slog.Logger
 	ch        chan Record
 	closeOnce sync.Once
 	done      chan struct{}
@@ -67,15 +68,20 @@ type Recorder struct {
 // NewRecorder 创建一个绑定到 st 的 Recorder。
 // st 为 nil 或未启用（Store.Enabled() == false）时返回 nil。
 // buffer 是 channel 容量；<=0 时取 defaultBuffer。
-func NewRecorder(st *store.Store, buffer int) *Recorder {
+// logger 为 nil 时回退到 slog.Default()。
+func NewRecorder(st *store.Store, buffer int, logger *slog.Logger) *Recorder {
 	if !st.Enabled() {
 		return nil
 	}
 	if buffer <= 0 {
 		buffer = defaultBuffer
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	r := &Recorder{
 		db:   st.DB(),
+		log:  logger,
 		ch:   make(chan Record, buffer),
 		done: make(chan struct{}),
 	}
@@ -92,8 +98,8 @@ func (r *Recorder) Record(rec Record) {
 	select {
 	case r.ch <- rec:
 	default:
-		log.Printf("stats: channel full, dropping record (path=%s model=%s)",
-			rec.ClientPath, rec.ClientModel)
+		r.log.Warn("stats channel full, dropping record",
+			"path", rec.ClientPath, "model", rec.ClientModel)
 	}
 }
 
@@ -121,7 +127,7 @@ func (r *Recorder) run() {
 			return
 		}
 		if err := writeBatch(r.db, buf); err != nil {
-			log.Printf("stats: batch insert failed: %v", err)
+			r.log.Error("stats batch insert failed", "err", err)
 		}
 		buf = buf[:0]
 	}

@@ -21,7 +21,7 @@ func TestHandleStatsDaily(t *testing.T) {
 	}
 	defer st.Close()
 
-	r := stats.NewRecorder(st, 16)
+	r := stats.NewRecorder(st, 16, nil)
 	r.Record(stats.Record{
 		Time: time.Now().UTC(), Duration: 120 * time.Millisecond, TTFT: 30 * time.Millisecond,
 		ClientProtocol: "openai_chat_completions", ClientPath: "/c", ClientModel: "gpt", ClientStatus: 200,
@@ -30,7 +30,7 @@ func TestHandleStatsDaily(t *testing.T) {
 	})
 	r.Close()
 
-	srv := New(config.Config{}, st)
+	srv := New(config.Config{}, st, nil)
 	h := srv.Handler()
 
 	req := httptest.NewRequest("GET", "/stats/daily?tz_offset=8", nil)
@@ -54,7 +54,7 @@ func TestHandleStatsDaily(t *testing.T) {
 
 func TestHandleStatsDailyDisabled(t *testing.T) {
 	// Storage off (nil store) -> 503, never panics.
-	srv := New(config.Config{}, nil)
+	srv := New(config.Config{}, nil, nil)
 	req := httptest.NewRequest("GET", "/stats/daily", nil)
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -67,7 +67,7 @@ func TestHandleStatsDailyBadParam(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.db")
 	st, _ := store.Open(path)
 	defer st.Close()
-	srv := New(config.Config{}, st)
+	srv := New(config.Config{}, st, nil)
 
 	req := httptest.NewRequest("GET", "/stats/daily?tz_offset=abc", nil)
 	w := httptest.NewRecorder()
@@ -85,7 +85,7 @@ func TestClientAPIKeyExemptsHealthAndStats(t *testing.T) {
 	}
 	defer st.Close()
 
-	srv := New(config.Config{ClientAPIKey: "apid-key"}, st)
+	srv := New(config.Config{ClientAPIKey: "apid-key"}, st, nil)
 	h := srv.Handler()
 
 	// With client auth on, the health probe and read-only stats/dashboard

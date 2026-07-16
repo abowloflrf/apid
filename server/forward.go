@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
@@ -37,7 +36,7 @@ func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, 
 		fwdBody = b
 		if traceEntry != nil {
 			if path := traceEntry.Dump("upstream", fwdBody); path != "" {
-				log.Printf("trace upstream request -> %s", path)
+				s.log.Info("trace upstream request", "file", path)
 			}
 		}
 	}
@@ -52,7 +51,7 @@ func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, 
 	stat.UpstreamStatus = resp.StatusCode
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		passUpstreamError(w, resp, stat)
+		s.passUpstreamError(w, resp, stat)
 		return
 	}
 
@@ -94,7 +93,7 @@ func (s *Server) forwardStream(ctx context.Context, tg *target, w http.ResponseW
 
 	usage, firstAt, err := forwardSSE(ctx, &sseWriter{w: w, f: flusher}, resp.Body, tg.cfg.Protocol)
 	if err != nil {
-		log.Printf("sse forward error: %v", err)
+		s.log.Warn("sse forward failed", "err", err)
 		stat.Error = "sse forward: " + err.Error()
 	}
 	if usage != nil {

@@ -16,7 +16,7 @@ func TestQueryDailyUsage(t *testing.T) {
 	}
 	defer st.Close()
 
-	r := NewRecorder(st, 16)
+	r := NewRecorder(st, 16, nil)
 	defer r.Close()
 
 	// Two requests on day 1 for model "a", one on day 2 for model "b".
@@ -88,7 +88,7 @@ func TestQueryDailyUsageTimeRangeAndTZ(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.db")
 	st, _ := store.Open(path)
 	defer st.Close()
-	r := NewRecorder(st, 16)
+	r := NewRecorder(st, 16, nil)
 	defer r.Close()
 
 	base := Record{

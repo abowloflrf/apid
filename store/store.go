@@ -10,7 +10,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
 
 	_ "modernc.org/sqlite"
 )
@@ -85,7 +84,6 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: apply schema failed: %w", err)
 	}
 
-	log.Printf("store enabled: db=%s", path)
 	return &Store{db: db, path: path}, nil
 }
 
