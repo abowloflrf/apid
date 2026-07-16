@@ -15,9 +15,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/server"
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/server"
+	"github.com/abowloflrf/apid/store"
 )
 
 // usageText explains how to run apid. apid has no command-line flags of its own:

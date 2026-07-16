@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/store"
 )
 
 // forwardConfig builds a same-protocol (pure-forward) config with one upstream.

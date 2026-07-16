@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 )
 
 type Client struct {
@@ -144,7 +144,7 @@ func (c *Client) applyAuth(dst, clientHeader http.Header) {
 
 // ChatCompletions 把转换后的 Chat 请求序列化后转发给上游。
 // 是 Forward 的薄封装，供协议转换路由使用。
-func (c *Client) ChatCompletions(ctx context.Context, req *types.ChatRequest, clientHeader http.Header) (*http.Response, error) {
+func (c *Client) ChatCompletions(ctx context.Context, req *protocol.ChatRequest, clientHeader http.Header) (*http.Response, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err

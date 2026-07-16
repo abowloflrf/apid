@@ -10,16 +10,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/store"
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/protocol"
+	"github.com/abowloflrf/apid/store"
 )
 
 // mockUpstream 返回一个模拟 Chat Completions 的上游服务器。
 func mockUpstream(t *testing.T, stream bool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 校验请求确实被转换成了 chat 格式。
-		var req types.ChatRequest
+		var req protocol.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("上游收到的请求无法解析: %v", err)
 		}
@@ -28,12 +28,12 @@ func mockUpstream(t *testing.T, stream bool) *httptest.Server {
 		}
 
 		if !stream {
-			_ = json.NewEncoder(w).Encode(types.ChatResponse{
+			_ = json.NewEncoder(w).Encode(protocol.ChatResponse{
 				ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
-				Choices: []types.ChatChoice{{
-					Message: types.ChatMessage{Role: "assistant", Content: "你好世界"}, FinishReason: "stop",
+				Choices: []protocol.ChatChoice{{
+					Message: protocol.ChatMessage{Role: "assistant", Content: "你好世界"}, FinishReason: "stop",
 				}},
-				Usage: &types.ChatUsage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
+				Usage: &protocol.ChatUsage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8},
 			})
 			return
 		}
@@ -41,9 +41,9 @@ func mockUpstream(t *testing.T, stream bool) *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		for _, tok := range []string{"你", "好", "世界"} {
-			chunk := types.ChatStreamChunk{
+			chunk := protocol.ChatStreamChunk{
 				ID: "chatcmpl-abc", Model: req.Model,
-				Choices: []types.ChatStreamChoice{{Delta: types.ChatChunkDelta{Content: tok}}},
+				Choices: []protocol.ChatStreamChoice{{Delta: protocol.ChatChunkDelta{Content: tok}}},
 			}
 			b, _ := json.Marshal(chunk)
 			_, _ = w.Write([]byte("data: " + string(b) + "\n\n"))
@@ -89,7 +89,7 @@ func TestNonStreaming(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("状态码 = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	var resp types.ResponsesResponse
+	var resp protocol.ResponsesResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("响应解析失败: %v", err)
 	}
@@ -111,12 +111,12 @@ func TestNonStreaming(t *testing.T) {
 func TestUpstreamModelOverride(t *testing.T) {
 	var gotModel string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req types.ChatRequest
+		var req protocol.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		gotModel = req.Model
-		_ = json.NewEncoder(w).Encode(types.ChatResponse{
+		_ = json.NewEncoder(w).Encode(protocol.ChatResponse{
 			ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
-			Choices: []types.ChatChoice{{Message: types.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Choices: []protocol.ChatChoice{{Message: protocol.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
 		})
 	}))
 	defer up.Close()
@@ -161,12 +161,12 @@ func TestEffectiveModel(t *testing.T) {
 func TestRuleModelOverride(t *testing.T) {
 	var gotModel string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req types.ChatRequest
+		var req protocol.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		gotModel = req.Model
-		_ = json.NewEncoder(w).Encode(types.ChatResponse{
+		_ = json.NewEncoder(w).Encode(protocol.ChatResponse{
 			ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
-			Choices: []types.ChatChoice{{Message: types.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Choices: []protocol.ChatChoice{{Message: protocol.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
 		})
 	}))
 	defer up.Close()
@@ -193,12 +193,12 @@ func TestRuleModelOverride(t *testing.T) {
 func TestRuleModelPassthrough(t *testing.T) {
 	var gotModel string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req types.ChatRequest
+		var req protocol.ChatRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		gotModel = req.Model
-		_ = json.NewEncoder(w).Encode(types.ChatResponse{
+		_ = json.NewEncoder(w).Encode(protocol.ChatResponse{
 			ID: "chatcmpl-abc", Object: "chat.completion", Created: 1, Model: req.Model,
-			Choices: []types.ChatChoice{{Message: types.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
+			Choices: []protocol.ChatChoice{{Message: protocol.ChatMessage{Role: "assistant", Content: "ok"}, FinishReason: "stop"}},
 		})
 	}))
 	defer up.Close()

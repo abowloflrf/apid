@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/store"
 )
 
 func TestQueryDailyUsage(t *testing.T) {

@@ -1,4 +1,4 @@
-package types
+package protocol
 
 // AnthropicUsage is the usage object returned by Anthropic Messages responses.
 type AnthropicUsage struct {

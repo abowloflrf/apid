@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 )
 
 // sink 实现 SSEWriter，收集所有写入内容用于断言。
@@ -25,7 +25,7 @@ func TestRequestTools(t *testing.T) {
       "tool_choice":{"type":"function","name":"get_weather"},
       "reasoning":{"effort":"high"}
     }`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestRequestToolParametersDefault(t *testing.T) {
       {"type":"function","name":"with_props","parameters":{"properties":{"x":{"type":"string"}}}},
       {"type":"function","name":"already_typed","parameters":{"type":"array"}}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestRequestToolChoiceObjectForms(t *testing.T) {
 	}
 	for in, want := range cases {
 		body := `{"model":"m","input":"hi","tool_choice":` + in + `}`
-		var req types.ResponsesRequest
+		var req protocol.ResponsesRequest
 		if err := json.Unmarshal([]byte(body), &req); err != nil {
 			t.Fatalf("input %s: %v", in, err)
 		}
@@ -106,7 +106,7 @@ func TestRequestToolChoiceObjectForms(t *testing.T) {
 
 func TestRequestParallelToolCalls(t *testing.T) {
 	body := `{"model":"m","input":"hi","parallel_tool_calls":false}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestRequestParallelToolCalls(t *testing.T) {
 
 	// 未提供时不应注入该字段（保持 nil，序列化时省略）。
 	body2 := `{"model":"m","input":"hi"}`
-	var req2 types.ResponsesRequest
+	var req2 protocol.ResponsesRequest
 	_ = json.Unmarshal([]byte(body2), &req2)
 	chat2, _, _ := ResponsesToChat(&req2, nil)
 	if chat2.ParallelToolCalls != nil {
@@ -142,7 +142,7 @@ func TestRequestNamespaceTools(t *testing.T) {
         ]}
       ]
     }`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestRequestToolConversation(t *testing.T) {
       {"type":"function_call","call_id":"call_1","name":"get_weather","arguments":"{\"city\":\"北京\"}"},
       {"type":"function_call_output","call_id":"call_1","output":"晴 25度"}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRequestNamespaceToolConversation(t *testing.T) {
       {"type":"function_call","call_id":"call_9","name":"mcp__tavily__tavily_search","arguments":"{\"query\":\"go\"}"},
       {"type":"function_call_output","call_id":"call_9","output":"结果"}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestRequestReasoningRoundTrip(t *testing.T) {
       {"type":"function_call","call_id":"c2","name":"get_air","arguments":"{}"},
       {"type":"function_call_output","call_id":"c1","output":"晴"}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestRequestReasoningBeforeMessage(t *testing.T) {
       {"type":"reasoning","summary":[{"type":"summary_text","text":"先想"}]},
       {"role":"assistant","content":"答案"}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestRequestContentBlockArray(t *testing.T) {
       {"role":"user","content":[{"type":"input_text","text":"a"},{"type":"input_text","text":"b"}]},
       {"type":"function_call_output","call_id":"c1","output":[{"type":"output_text","text":"x"},{"type":"output_text","text":"y"}]}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestRequestContentBlockArray(t *testing.T) {
 func TestRequestDeveloperRole(t *testing.T) {
 	// Responses 的 "developer" 角色 Chat Completions 不认，应归一为 "system"。
 	body := `{"model":"m","input":[{"role":"developer","content":"开发者指令"}]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}
@@ -322,10 +322,10 @@ func TestRequestDeveloperRole(t *testing.T) {
 func TestResponseContentFilter(t *testing.T) {
 	// finish_reason=content_filter 应报 incomplete + reason content_filter，
 	// 而不是谎报 completed。
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
-		Choices: []types.ChatChoice{{
-			Message:      types.ChatMessage{Role: "assistant", Content: "被过滤"},
+		Choices: []protocol.ChatChoice{{
+			Message:      protocol.ChatMessage{Role: "assistant", Content: "被过滤"},
 			FinishReason: "content_filter",
 		}},
 	}
@@ -390,15 +390,15 @@ func TestStreamReadError(t *testing.T) {
 }
 
 func TestResponseToolsAndReasoning(t *testing.T) {
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
-		Choices: []types.ChatChoice{{
-			Message: types.ChatMessage{
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{
 				Role:             "assistant",
 				ReasoningContent: "先想一下",
-				ToolCalls: []types.ChatToolCall{{
+				ToolCalls: []protocol.ChatToolCall{{
 					ID: "call_9", Type: "function",
-					Function: types.ChatToolCallFunction{Name: "get_weather", Arguments: `{"city":"上海"}`},
+					Function: protocol.ChatToolCallFunction{Name: "get_weather", Arguments: `{"city":"上海"}`},
 				}},
 			},
 			FinishReason: "tool_calls",
@@ -419,14 +419,14 @@ func TestResponseToolsAndReasoning(t *testing.T) {
 
 // P2: 上游 completion_tokens_details.reasoning_tokens 映射为 output_tokens_details。
 func TestResponseUsageReasoningTokens(t *testing.T) {
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Model: "m",
-		Choices: []types.ChatChoice{{
-			Message: types.ChatMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", Content: "hi"}, FinishReason: "stop",
 		}},
-		Usage: &types.ChatUsage{
+		Usage: &protocol.ChatUsage{
 			PromptTokens: 10, CompletionTokens: 8, TotalTokens: 18,
-			CompletionTokensDetails: &types.ChatCompletionTokensDetails{ReasoningTokens: 5},
+			CompletionTokensDetails: &protocol.ChatCompletionTokensDetails{ReasoningTokens: 5},
 		},
 	}
 	resp := ChatToResponses(chat, nil)
@@ -443,7 +443,7 @@ func TestResponseReasoningFromAltField(t *testing.T) {
 	raw := `{"id":"chatcmpl-x","model":"m","choices":[{"index":0,
 		"message":{"role":"assistant","reasoning":"另一种字段","content":"答"},
 		"finish_reason":"stop"}]}`
-	var chat types.ChatResponse
+	var chat protocol.ChatResponse
 	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestResponseContentBlockArray(t *testing.T) {
 		"message":{"role":"assistant","content":[
 			{"type":"text","text":"前"},{"type":"text","text":"后"}]},
 		"finish_reason":"stop"}]}`
-	var chat types.ChatResponse
+	var chat protocol.ChatResponse
 	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
 		t.Fatalf("数组形态 content 不应反序列化失败: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestResponseRefusal(t *testing.T) {
 	raw := `{"id":"chatcmpl-x","model":"m","choices":[{"index":0,
 		"message":{"role":"assistant","refusal":"我不能这么做"},
 		"finish_reason":"stop"}]}`
-	var chat types.ChatResponse
+	var chat protocol.ChatResponse
 	if err := json.Unmarshal([]byte(raw), &chat); err != nil {
 		t.Fatalf("refusal 形态不应反序列化失败: %v", err)
 	}
@@ -497,10 +497,10 @@ func TestResponseRefusal(t *testing.T) {
 func TestResponseIncompleteOnLength(t *testing.T) {
 	// 上游因 max_tokens 截断(finish_reason=length)，整体状态与 message 项都应是 incomplete，
 	// 并带 incomplete_details.reason=max_output_tokens，而不是谎报 completed。
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
-		Choices: []types.ChatChoice{{
-			Message:      types.ChatMessage{Role: "assistant", Content: "被截断的文"},
+		Choices: []protocol.ChatChoice{{
+			Message:      protocol.ChatMessage{Role: "assistant", Content: "被截断的文"},
 			FinishReason: "length",
 		}},
 	}
@@ -518,10 +518,10 @@ func TestResponseIncompleteOnLength(t *testing.T) {
 
 func TestResponseCompletedNoIncompleteDetails(t *testing.T) {
 	// 正常结束(finish_reason=stop)：completed 且不带 incomplete_details。
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
-		Choices: []types.ChatChoice{{
-			Message:      types.ChatMessage{Role: "assistant", Content: "完整回答"},
+		Choices: []protocol.ChatChoice{{
+			Message:      protocol.ChatMessage{Role: "assistant", Content: "完整回答"},
 			FinishReason: "stop",
 		}},
 	}
@@ -576,8 +576,8 @@ func TestStreamUpstreamError(t *testing.T) {
 func TestResponseNamespaceRestored(t *testing.T) {
 	// 上游用扁平名发回工具调用，apid 应把它拆回本地名 + namespace，
 	// 否则 Codex 按 {name, namespace} 匹配注册表会失败(unsupported call)。
-	req := &types.ResponsesRequest{Tools: []types.ResponsesTool{
-		{Type: "namespace", Name: "mcp__tavily", Tools: []types.ResponsesTool{
+	req := &protocol.ResponsesRequest{Tools: []protocol.ResponsesTool{
+		{Type: "namespace", Name: "mcp__tavily", Tools: []protocol.ResponsesTool{
 			{Type: "function", Name: "tavily_search"},
 		}},
 	}}
@@ -589,12 +589,12 @@ func TestResponseNamespaceRestored(t *testing.T) {
 		t.Fatalf("命名空间映射错误: %+v", ns)
 	}
 
-	chat := &types.ChatResponse{
+	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
-		Choices: []types.ChatChoice{{
-			Message: types.ChatMessage{Role: "assistant", ToolCalls: []types.ChatToolCall{{
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
 				ID: "call_1", Type: "function",
-				Function: types.ChatToolCallFunction{Name: "mcp__tavily__tavily_search", Arguments: `{"q":"x"}`},
+				Function: protocol.ChatToolCallFunction{Name: "mcp__tavily__tavily_search", Arguments: `{"q":"x"}`},
 			}}},
 			FinishReason: "tool_calls",
 		}},
@@ -616,7 +616,7 @@ func TestRequestNamespaceCallReflatten(t *testing.T) {
       {"type":"function_call","call_id":"c1","name":"tavily_search","namespace":"mcp__tavily","arguments":"{}"},
       {"type":"function_call_output","call_id":"c1","output":"ok"}
     ]}`
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
 	}

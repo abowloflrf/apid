@@ -7,7 +7,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 )
 
 // ReasoningSource 按 call_id 或 assistant 文本内容取回此前缓存的 reasoning_content，
@@ -24,12 +24,12 @@ type ReasoningSource interface {
 //
 // 同时返回「扁平工具名 -> (命名空间, 本地名)」映射(见 expandTools)，供响应方向
 // 把 MCP 工具的 function_call 从上游扁平名拆回本地名 + namespace。
-func ResponsesToChat(r *types.ResponsesRequest, src ReasoningSource) (*types.ChatRequest, map[string]NamespacedTool, error) {
-	messages := make([]types.ChatMessage, 0, 4)
+func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protocol.ChatRequest, map[string]NamespacedTool, error) {
+	messages := make([]protocol.ChatMessage, 0, 4)
 
 	// instructions 映射为 system 消息，放在最前面。
 	if r.Instructions != "" {
-		messages = append(messages, types.ChatMessage{Role: "system", Content: r.Instructions})
+		messages = append(messages, protocol.ChatMessage{Role: "system", Content: r.Instructions})
 	}
 
 	inputMsgs, err := parseInput(r.Input, src)
@@ -39,7 +39,7 @@ func ResponsesToChat(r *types.ResponsesRequest, src ReasoningSource) (*types.Cha
 	messages = append(messages, inputMsgs...)
 
 	tools, namespaces := expandTools(r.Tools)
-	chat := &types.ChatRequest{
+	chat := &protocol.ChatRequest{
 		Model:             r.Model,
 		Messages:          messages,
 		Temperature:       r.Temperature,
@@ -52,7 +52,7 @@ func ResponsesToChat(r *types.ResponsesRequest, src ReasoningSource) (*types.Cha
 	}
 
 	if chat.Stream {
-		chat.StreamOptions = &types.StreamOptions{IncludeUsage: true}
+		chat.StreamOptions = &protocol.StreamOptions{IncludeUsage: true}
 	}
 
 	if r.Reasoning != nil && r.Reasoning.Effort != "" {
@@ -71,21 +71,21 @@ type NamespacedTool struct {
 // expandTools 递归展开 Responses 工具定义，一次遍历得到两样东西：
 //   - 发给上游的扁平 Chat 工具列表
 //   - 「扁平名 -> (命名空间, 本地名)」映射
-func expandTools(tools []types.ResponsesTool) ([]types.ChatTool, map[string]NamespacedTool) {
-	var chat []types.ChatTool
+func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[string]NamespacedTool) {
+	var chat []protocol.ChatTool
 	namespaces := make(map[string]NamespacedTool)
 
-	var walk func(tools []types.ResponsesTool, prefix string)
-	walk = func(tools []types.ResponsesTool, prefix string) {
+	var walk func(tools []protocol.ResponsesTool, prefix string)
+	walk = func(tools []protocol.ResponsesTool, prefix string) {
 		for _, t := range tools {
 			switch {
 			case t.Type == "namespace":
 				walk(t.Tools, joinToolName(prefix, t.Name))
 			case t.Type == "function" && t.Name != "":
 				flat := joinToolName(prefix, t.Name)
-				chat = append(chat, types.ChatTool{
+				chat = append(chat, protocol.ChatTool{
 					Type: "function",
-					Function: types.ChatToolFunction{
+					Function: protocol.ChatToolFunction{
 						Name:        flat,
 						Description: t.Description,
 						Parameters:  ensureObjectSchema(t.Parameters),
@@ -166,27 +166,27 @@ func convertToolChoice(raw json.RawMessage) json.RawMessage {
 
 // parseInput 解析 Responses 的 input 字段。
 // src 用于按 call_id / assistant 文本指纹回填 reasoning_content；nil 时跳过。
-func parseInput(raw json.RawMessage, src ReasoningSource) ([]types.ChatMessage, error) {
+func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return []types.ChatMessage{{Role: "user", Content: s}}, nil
+		return []protocol.ChatMessage{{Role: "user", Content: s}}, nil
 	}
 
-	var items []types.InputItem
+	var items []protocol.InputItem
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, fmt.Errorf("无法解析 input 字段: %w", err)
 	}
 
-	out := make([]types.ChatMessage, 0, len(items))
+	out := make([]protocol.ChatMessage, 0, len(items))
 	// pendingReasoning 暂存上一条 reasoning 输入项的摘要，仅作缓存未命中时的兜底；
 	// reasoning 回传优先取网关缓存里的原文（Codex 重放的 reasoning 不可靠）。
 	pendingReasoning := ""
 	// toolMsg 指向当前正在累积工具调用的 assistant 消息，连续 function_call 合并进同一条。
-	var toolMsg *types.ChatMessage
+	var toolMsg *protocol.ChatMessage
 
 	for _, it := range items {
 		if it.Type != "function_call" {
@@ -198,10 +198,10 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]types.ChatMessage, 
 			if it.Namespace != "" {
 				name = joinToolName(it.Namespace, it.Name)
 			}
-			call := types.ChatToolCall{
+			call := protocol.ChatToolCall{
 				ID:   it.CallID,
 				Type: "function",
-				Function: types.ChatToolCallFunction{
+				Function: protocol.ChatToolCallFunction{
 					Name:      name,
 					Arguments: it.Arguments,
 				},
@@ -213,7 +213,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]types.ChatMessage, 
 				if rc == "" {
 					rc = pendingReasoning
 				}
-				out = append(out, types.ChatMessage{
+				out = append(out, protocol.ChatMessage{
 					Role:             "assistant",
 					ReasoningContent: rc,
 				})
@@ -223,7 +223,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]types.ChatMessage, 
 			toolMsg.ToolCalls = append(toolMsg.ToolCalls, call)
 
 		case "function_call_output":
-			out = append(out, types.ChatMessage{
+			out = append(out, protocol.ChatMessage{
 				Role:       "tool",
 				ToolCallID: it.CallID,
 				Content:    extractText(it.Output),
@@ -235,7 +235,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]types.ChatMessage, 
 		default: // "" 或 "message"
 			role := mapRole(it.Role)
 			content := extractText(it.Content)
-			msg := types.ChatMessage{Role: role, Content: content}
+			msg := protocol.ChatMessage{Role: role, Content: content}
 			if role == "assistant" {
 				// 按 assistant 文本指纹取回原文，未命中用摘要兜底。
 				rc := lookupContent(src, content)
@@ -268,7 +268,7 @@ func lookupContent(src ReasoningSource, content string) string {
 }
 
 // summaryText 把 reasoning 项的 summary 块拼接成纯文本。
-func summaryText(summary []types.SummaryText) string {
+func summaryText(summary []protocol.SummaryText) string {
 	var b strings.Builder
 	for _, s := range summary {
 		b.WriteString(s.Text)
@@ -293,7 +293,7 @@ func extractText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	var parts []types.InputContentPart
+	var parts []protocol.InputContentPart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return ""
 	}
@@ -310,20 +310,20 @@ func extractText(raw json.RawMessage) string {
 // function_call_output 之间导致的顺序问题。Chat Completions API 要求
 // assistant[tool_calls] → tool 必须连续，中间不能有 system 消息。
 // 被插队的 system 消息移到 messages[0]（替换已有 system 或插在最前面）。
-func FixSystemOrdering(messages []types.ChatMessage) []types.ChatMessage {
+func FixSystemOrdering(messages []protocol.ChatMessage) []protocol.ChatMessage {
 	if len(messages) <= 1 {
 		return messages
 	}
 
 	// 从前往后扫描，把 index > 0 且 role == "system" 的消息移到最前面。
-	var cleaned []types.ChatMessage
+	var cleaned []protocol.ChatMessage
 	for i, m := range messages {
 		if i > 0 && m.Role == "system" {
 			// 替换 messages[0] 如果它已经是 system，否则 insert。
 			if len(cleaned) > 0 && cleaned[0].Role == "system" {
 				cleaned[0] = m
 			} else {
-				cleaned = append([]types.ChatMessage{m}, cleaned...)
+				cleaned = append([]protocol.ChatMessage{m}, cleaned...)
 			}
 		} else {
 			cleaned = append(cleaned, m)

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/store"
 )
 
 // seedDashboard inserts a small, deterministic dataset: model "a" has two

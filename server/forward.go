@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/stats"
-	"github.com/abowloflrf/apid/internal/trace"
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/protocol"
+	"github.com/abowloflrf/apid/stats"
+	"github.com/abowloflrf/apid/trace"
 )
 
 // reqSniff reads only the top-level model / stream; both protocols share these
@@ -128,21 +128,21 @@ func extractUsage(proto config.Protocol, body []byte) *stats.Usage {
 	switch proto {
 	case config.ProtoChat:
 		var r struct {
-			Usage *types.ChatUsage `json:"usage"`
+			Usage *protocol.ChatUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &r) == nil {
 			return toStatsUsage(r.Usage)
 		}
 	case config.ProtoResponses:
 		var r struct {
-			Usage *types.ResponseUsage `json:"usage"`
+			Usage *protocol.ResponseUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &r) == nil {
 			return responseUsageToStats(r.Usage)
 		}
 	case config.ProtoAnthropic:
 		var r struct {
-			Usage *types.AnthropicUsage `json:"usage"`
+			Usage *protocol.AnthropicUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &r) == nil {
 			return anthropicUsageToStats(r.Usage)
@@ -152,7 +152,7 @@ func extractUsage(proto config.Protocol, body []byte) *stats.Usage {
 }
 
 // responseUsageToStats 把 Responses 协议的 usage 映射到 stats.Usage。
-func responseUsageToStats(u *types.ResponseUsage) *stats.Usage {
+func responseUsageToStats(u *protocol.ResponseUsage) *stats.Usage {
 	if u == nil {
 		return nil
 	}
@@ -170,7 +170,7 @@ func responseUsageToStats(u *types.ResponseUsage) *stats.Usage {
 // anthropicUsageToStats maps Anthropic's split cache fields into the common
 // stats shape. InputTokens includes normal input, cache creation, and cache read
 // tokens so TotalTokens remains the full request size.
-func anthropicUsageToStats(u *types.AnthropicUsage) *stats.Usage {
+func anthropicUsageToStats(u *protocol.AnthropicUsage) *stats.Usage {
 	if u == nil {
 		return nil
 	}

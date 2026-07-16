@@ -1,6 +1,6 @@
-// Package types 定义 Responses API 与 Chat Completions API 的请求 / 响应结构。
+// Package protocol 定义 Responses API 与 Chat Completions API 的请求 / 响应结构。
 // 本 demo 覆盖最关键的字段：文本、工具调用(function calling)、reasoning。
-package types
+package protocol
 
 import "encoding/json"
 

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/store"
 )
 
 // 默认 channel 容量与批大小。可在 NewRecorder 时覆盖 buffer。

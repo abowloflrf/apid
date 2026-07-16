@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/stats"
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/protocol"
+	"github.com/abowloflrf/apid/stats"
 )
 
 // forwardSSE streams upstream SSE to the client verbatim, tee-parsing usage and
@@ -75,7 +75,7 @@ func parseSSELine(line []byte, proto config.Protocol, usage **stats.Usage, first
 
 // parseChatSSE：usage 取末尾分片的 usage；TTFT 取首个含内容增量的分片。
 func parseChatSSE(data string, usage **stats.Usage, firstTokenAt *time.Time) {
-	var chunk types.ChatStreamChunk
+	var chunk protocol.ChatStreamChunk
 	if json.Unmarshal([]byte(data), &chunk) != nil {
 		return
 	}
@@ -97,7 +97,7 @@ func parseChatSSE(data string, usage **stats.Usage, firstTokenAt *time.Time) {
 type responsesSSEEnvelope struct {
 	Type     string `json:"type"`
 	Response struct {
-		Usage *types.ResponseUsage `json:"usage"`
+		Usage *protocol.ResponseUsage `json:"usage"`
 	} `json:"response"`
 }
 
@@ -117,7 +117,7 @@ func parseResponsesSSE(data string, usage **stats.Usage, firstTokenAt *time.Time
 }
 
 func parseAnthropicSSE(data string, usage **stats.Usage, firstTokenAt *time.Time) {
-	var ev types.AnthropicStreamEvent
+	var ev protocol.AnthropicStreamEvent
 	if json.Unmarshal([]byte(data), &ev) != nil {
 		return
 	}
@@ -132,7 +132,7 @@ func parseAnthropicSSE(data string, usage **stats.Usage, firstTokenAt *time.Time
 	}
 }
 
-func mergeAnthropicUsage(dst **stats.Usage, src *types.AnthropicUsage) {
+func mergeAnthropicUsage(dst **stats.Usage, src *protocol.AnthropicUsage) {
 	if src == nil {
 		return
 	}

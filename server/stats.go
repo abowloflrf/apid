@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/stats"
+	"github.com/abowloflrf/apid/stats"
 )
 
 // webuiFS holds the self-contained dashboard (HTML/CSS/JS + Chart.js under

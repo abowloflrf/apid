@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 	"github.com/google/uuid"
 )
 
@@ -24,7 +24,7 @@ type SSEWriter interface {
 // StreamResult 是流式转换的终态结果，承载流末拿到的 usage、首 token 时刻，
 // 以及供回写 reasoning 缓存的 assistant 信息。
 type StreamResult struct {
-	Usage         *types.ChatUsage
+	Usage         *protocol.ChatUsage
 	FirstTokenAt  time.Time
 	ToolCallIDs   []string // 所有 tool call 的 call_id，按 call_id 存 reasoning 用
 	ReasoningText string   // 累积的 reasoning_content
@@ -82,7 +82,7 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 			st.fail(msg)
 			return &StreamResult{}, nil
 		}
-		var chunk types.ChatStreamChunk
+		var chunk protocol.ChatStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
@@ -138,7 +138,7 @@ type streamState struct {
 	model      string
 	responseID string
 	createdAt  int64
-	usage      *types.ChatUsage
+	usage      *protocol.ChatUsage
 
 	firstTokenAt time.Time
 	finishReason string
@@ -195,7 +195,7 @@ func (st *streamState) functionCallItem(ts *toolState, status, args string) map[
 	return item
 }
 
-func (st *streamState) handleDelta(d types.ChatChunkDelta) {
+func (st *streamState) handleDelta(d protocol.ChatChunkDelta) {
 	if st.firstTokenAt.IsZero() &&
 		(d.ReasoningContent != "" || d.Content != "" || len(d.ToolCalls) > 0) {
 		st.firstTokenAt = time.Now()
@@ -263,7 +263,7 @@ func (st *streamState) handleText(delta string) {
 	})
 }
 
-func (st *streamState) handleToolCall(tc types.ChatToolCall) {
+func (st *streamState) handleToolCall(tc protocol.ChatToolCall) {
 	idx := 0
 	if tc.Index != nil {
 		idx = *tc.Index

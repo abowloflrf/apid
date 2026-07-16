@@ -3,17 +3,17 @@ package convert
 import (
 	"strconv"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 )
 
 // ChatToResponses 把一个非流式 Chat Completions 响应转换为 Responses API 响应。
 // 输出项顺序：reasoning -> message(文本) -> function_call(工具调用)。
 // namespaces 是「扁平工具名 -> (命名空间, 本地名)」映射(见 ToolNamespaces)，用于把
 // MCP 工具的 function_call 从上游扁平名拆回本地名 + namespace；非命名空间工具传 nil 即可。
-func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool) *types.ResponsesResponse {
+func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedTool) *protocol.ResponsesResponse {
 	id := stripPrefix(c.ID)
 
-	var msg types.ChatMessage
+	var msg protocol.ChatMessage
 	finishReason := ""
 	if len(c.Choices) > 0 {
 		msg = c.Choices[0].Message
@@ -29,15 +29,15 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 		msgStatus = statusIncomplete
 	}
 
-	output := make([]types.OutputItem, 0, 3)
+	output := make([]protocol.OutputItem, 0, 3)
 
 	// 1) reasoning：上游若返回 reasoning_content，转为 reasoning 输出项。
 	if msg.ReasoningContent != "" {
-		output = append(output, types.OutputItem{
+		output = append(output, protocol.OutputItem{
 			Type:   "reasoning",
 			ID:     "rs_" + id,
 			Status: "completed",
-			Summary: []types.SummaryText{
+			Summary: []protocol.SummaryText{
 				{Type: "summary_text", Text: msg.ReasoningContent},
 			},
 		})
@@ -47,16 +47,16 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 	// 上游拒绝(content_filter 等)走 refusal 字段，映射为 refusal 内容块，
 	// 否则客户端只看到一条空 message、不知为何无输出。
 	if msg.Content != "" || msg.Refusal != "" {
-		content := make([]types.OutputContent, 0, 2)
+		content := make([]protocol.OutputContent, 0, 2)
 		if msg.Content != "" {
-			content = append(content, types.OutputContent{
+			content = append(content, protocol.OutputContent{
 				Type: "output_text", Text: msg.Content, Annotations: []any{},
 			})
 		}
 		if msg.Refusal != "" {
-			content = append(content, types.OutputContent{Type: "refusal", Refusal: msg.Refusal})
+			content = append(content, protocol.OutputContent{Type: "refusal", Refusal: msg.Refusal})
 		}
-		output = append(output, types.OutputItem{
+		output = append(output, protocol.OutputItem{
 			Type:    "message",
 			ID:      "msg_" + id,
 			Status:  msgStatus,
@@ -69,7 +69,7 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 	// 命名空间工具要把上游扁平名拆回本地名 + namespace(见 ToolNamespaces)。
 	for i, tc := range msg.ToolCalls {
 		name, namespace := splitToolName(tc.Function.Name, namespaces)
-		output = append(output, types.OutputItem{
+		output = append(output, protocol.OutputItem{
 			Type:      "function_call",
 			ID:        callItemID(id, i),
 			Status:    "completed",
@@ -80,7 +80,7 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 		})
 	}
 
-	resp := &types.ResponsesResponse{
+	resp := &protocol.ResponsesResponse{
 		ID:        "resp_" + id,
 		Object:    "response",
 		CreatedAt: c.Created,
@@ -89,20 +89,20 @@ func ChatToResponses(c *types.ChatResponse, namespaces map[string]NamespacedTool
 		Output:    output,
 	}
 	if incompleteReason != "" {
-		resp.IncompleteDetails = &types.IncompleteDetails{Reason: incompleteReason}
+		resp.IncompleteDetails = &protocol.IncompleteDetails{Reason: incompleteReason}
 	}
 
 	if c.Usage != nil {
-		resp.Usage = &types.ResponseUsage{
+		resp.Usage = &protocol.ResponseUsage{
 			InputTokens:  c.Usage.PromptTokens,
 			OutputTokens: c.Usage.CompletionTokens,
 			TotalTokens:  c.Usage.TotalTokens,
 		}
 		if d := c.Usage.PromptTokensDetails; d != nil {
-			resp.Usage.InputTokensDetails = &types.InputTokensDetails{CachedTokens: d.CachedTokens}
+			resp.Usage.InputTokensDetails = &protocol.InputTokensDetails{CachedTokens: d.CachedTokens}
 		}
 		if d := c.Usage.CompletionTokensDetails; d != nil {
-			resp.Usage.OutputTokensDetails = &types.OutputTokensDetails{ReasoningTokens: d.ReasoningTokens}
+			resp.Usage.OutputTokensDetails = &protocol.OutputTokensDetails{ReasoningTokens: d.ReasoningTokens}
 		}
 	}
 

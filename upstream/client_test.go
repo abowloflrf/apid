@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/abowloflrf/apid/internal/types"
+	"github.com/abowloflrf/apid/protocol"
 )
 
 // TestForwardHeaderPassthrough asserts business headers reach the upstream while
@@ -153,9 +153,9 @@ func TestChatCompletions(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "/v1/chat/completions", "secret-key")
-	req := &types.ChatRequest{
+	req := &protocol.ChatRequest{
 		Model:    "deepseek-chat",
-		Messages: []types.ChatMessage{{Role: "user", Content: "hi"}},
+		Messages: []protocol.ChatMessage{{Role: "user", Content: "hi"}},
 	}
 
 	resp, err := c.ChatCompletions(context.Background(), req, http.Header{})
@@ -170,7 +170,7 @@ func TestChatCompletions(t *testing.T) {
 	if gotAuth != "Bearer secret-key" {
 		t.Errorf("Authorization = %q, want apiKey", gotAuth)
 	}
-	var sent types.ChatRequest
+	var sent protocol.ChatRequest
 	if err := json.Unmarshal(gotBody, &sent); err != nil {
 		t.Fatalf("upstream got non-JSON body %q: %v", gotBody, err)
 	}

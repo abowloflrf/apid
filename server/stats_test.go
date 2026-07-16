@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/stats"
-	"github.com/abowloflrf/apid/internal/store"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/stats"
+	"github.com/abowloflrf/apid/store"
 )
 
 func TestHandleStatsDaily(t *testing.T) {

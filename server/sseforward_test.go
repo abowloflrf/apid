@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/stats"
+	"github.com/abowloflrf/apid/stats"
 )
 
 // TestParseResponsesSSE covers the Responses event stream parser: a *.delta event

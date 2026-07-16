@@ -23,14 +23,14 @@
 go build ./...                                   # 编译
 go vet ./...                                     # 静态检查
 go test ./...                                    # 全部测试
-go test ./internal/convert -run TestStreamTools  # 跑单个测试(按名匹配)
+go test ./convert -run TestStreamTools  # 跑单个测试(按名匹配)
 go run .                                          # 启动服务
 ```
 
 ## 配置
 
 **转发配置走 TOML**(`--config`,默认 `config.toml`,缺失/非法即启动失败),
-**运维参数走环境变量**。完整字段见 `config.example.toml` 与 `internal/config`
+**运维参数走环境变量**。完整字段见 `config.example.toml` 与 `config`
 的 struct 注释,这里只记约定:
 
 - `[[upstream]].model`:非空覆盖转发 model(纯转发也生效),留空透传。
@@ -46,14 +46,14 @@ go run .                                          # 启动服务
 
 分层、各司其职,逐包细节见各文件 doc comment:
 
-- **`internal/config`** — 两张表的加载/校验/`Resolve`(精确>glob>兜底)。**新增协议或配置字段改这里。**
-- **`internal/types`** — 多协议结构并存:`responses.go`、`chat.go`、`anthropic.go`;联合类型字段用 `json.RawMessage` 延迟解析。
-- **`internal/convert`** — Responses⇄Chat 三方向转换:`request.go`/`response.go`/`stream.go`(有状态累加器)。**扩展字段映射改这里 + 补 `convert_test.go`。**
-- **`internal/upstream`** — 每个 upstream 一个 `Client`(绑定 baseURL+path+apiKey),`Forward` 转发原始字节,`ChatCompletions` 是其薄封装。
-- **`internal/trace`** — 可选 TRACE 落盘,配对离线 DEBUG;配套 `trace-viewer.html`。禁用时零开销。
-- **`internal/store`** — 通用 SQLite 层(WAL),schema 集中维护,**加表改 `store.go` 一处**。
-- **`internal/stats`** — 在 store 之上异步落盘请求指标:有界 channel + 单 worker 批量 INSERT,热路径满即丢、永不阻塞,nil 安全。读侧 `query.go` 的 `QueryDailyUsage` 做按天×上游模型聚合,供 Grafana 端点用。
-- **`internal/server`** — path→model 两级分派。`handleRoute` 编排:读 body→sniff model→resolve→算生效 model→trace/stats,再按协议是否相等分派到 `convertResponsesToChat` 或 `forwardRaw`(`forward.go`/`sseforward.go`)。两条路径都用 `passUpstreamError` 原样回传上游非 2xx。另有只读指标端点 `GET /stats/daily`(`stats.go`),返回 Grafana Infinity 数据源可直接消费的扁平 JSON。
+- **`config`** — 两张表的加载/校验/`Resolve`(精确>glob>兜底)。**新增协议或配置字段改这里。**
+- **`protocol`** — 多协议结构并存:`responses.go`、`chat.go`、`anthropic.go`;联合类型字段用 `json.RawMessage` 延迟解析。
+- **`convert`** — Responses⇄Chat 三方向转换:`request.go`/`response.go`/`stream.go`(有状态累加器)。**扩展字段映射改这里 + 补 `convert_test.go`。**
+- **`upstream`** — 每个 upstream 一个 `Client`(绑定 baseURL+path+apiKey),`Forward` 转发原始字节,`ChatCompletions` 是其薄封装。
+- **`trace`** — 可选 TRACE 落盘,配对离线 DEBUG;配套 `trace-viewer.html`。禁用时零开销。
+- **`store`** — 通用 SQLite 层(WAL),schema 集中维护,**加表改 `store.go` 一处**。
+- **`stats`** — 在 store 之上异步落盘请求指标:有界 channel + 单 worker 批量 INSERT,热路径满即丢、永不阻塞,nil 安全。读侧 `query.go` 的 `QueryDailyUsage` 做按天×上游模型聚合,供 Grafana 端点用。
+- **`server`** — path→model 两级分派。`handleRoute` 编排:读 body→sniff model→resolve→算生效 model→trace/stats,再按协议是否相等分派到 `convertResponsesToChat` 或 `forwardRaw`(`forward.go`/`sseforward.go`)。两条路径都用 `passUpstreamError` 原样回传上游非 2xx。另有只读指标端点 `GET /stats/daily`(`stats.go`),返回 Grafana Infinity 数据源可直接消费的扁平 JSON。
 - **`main.go`** — 入口 + 优雅退出(Shutdown → srv.Close 排空 stats → store.Close)。
 
 ## 关键约定与不变量

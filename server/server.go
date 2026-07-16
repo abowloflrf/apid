@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abowloflrf/apid/internal/config"
-	"github.com/abowloflrf/apid/internal/convert"
-	"github.com/abowloflrf/apid/internal/reasoning"
-	"github.com/abowloflrf/apid/internal/stats"
-	"github.com/abowloflrf/apid/internal/store"
-	"github.com/abowloflrf/apid/internal/trace"
-	"github.com/abowloflrf/apid/internal/types"
-	"github.com/abowloflrf/apid/internal/upstream"
+	"github.com/abowloflrf/apid/config"
+	"github.com/abowloflrf/apid/convert"
+	"github.com/abowloflrf/apid/protocol"
+	"github.com/abowloflrf/apid/reasoning"
+	"github.com/abowloflrf/apid/stats"
+	"github.com/abowloflrf/apid/store"
+	"github.com/abowloflrf/apid/trace"
+	"github.com/abowloflrf/apid/upstream"
 )
 
 // route is a config entrypoint keyed by its exposed path.
@@ -312,7 +312,7 @@ func upstreamClientHeaders(src http.Header) http.Header {
 
 // convertResponsesToChat handles a responses -> chat route.
 func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
-	var req types.ResponsesRequest
+	var req protocol.ResponsesRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		stat.Error = "parse request body: " + err.Error()
 		writeError(w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
@@ -367,7 +367,7 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 // ---- 非流式 ----
 
 func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces map[string]convert.NamespacedTool, stat *stats.Record) {
-	var chatResp types.ChatResponse
+	var chatResp protocol.ChatResponse
 	if err := json.NewDecoder(body).Decode(&chatResp); err != nil {
 		stat.Error = "parse upstream response: " + err.Error()
 		writeError(w, http.StatusBadGateway, "failed to parse upstream response: "+err.Error())
@@ -435,7 +435,7 @@ func (s *Server) saveReasoning(callIDs []string, content, reasoning string) {
 }
 
 // toolCallIDs 提取 assistant.tool_calls 里的 call_id 列表。
-func toolCallIDs(calls []types.ChatToolCall) []string {
+func toolCallIDs(calls []protocol.ChatToolCall) []string {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -463,7 +463,7 @@ func passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.R
 	_, _ = w.Write(errBody)
 }
 
-func toStatsUsage(u *types.ChatUsage) *stats.Usage {
+func toStatsUsage(u *protocol.ChatUsage) *stats.Usage {
 	if u == nil {
 		return nil
 	}
