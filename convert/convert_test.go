@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/abowloflrf/apid/protocol"
 )
@@ -368,17 +369,20 @@ func TestStreamCreatedAndInProgress(t *testing.T) {
 }
 
 func TestStreamReadError(t *testing.T) {
-	// 单行超出扫描缓冲上限(1MB)会让 bufio.Scanner 报错；此时已发过
-	// response.created，必须补发 response.failed 并向上返回错误，
-	// 否则客户端等不到收尾事件会挂死。
-	raw := "data: " + strings.Repeat("a", 2*1024*1024)
+	// A mid-stream read error arrives after response.created has been sent, so
+	// the converter must emit response.failed as the closing event and surface
+	// the error to the caller; otherwise the client hangs waiting for an end.
+	r := io.MultiReader(
+		strings.NewReader("data: "+`{"choices":[{"delta":{"content":"hi"}}]}`+"\n\n"),
+		iotest.ErrReader(errors.New("connection reset")),
+	)
 	var s sink
-	result, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
+	result, err := StreamChatToResponses(context.Background(), &s, r, "m", nil)
 	if err == nil {
-		t.Fatal("超长行应返回扫描错误")
+		t.Fatal("read error should be returned to the caller")
 	}
 	if result == nil {
-		t.Fatal("出错时也应返回非 nil 的 StreamResult")
+		t.Fatal("StreamResult should be non-nil on error")
 	}
 	out := s.b.String()
 	if !strings.Contains(out, "event: response.failed") {
@@ -386,6 +390,25 @@ func TestStreamReadError(t *testing.T) {
 	}
 	if strings.Contains(out, "event: response.completed") {
 		t.Errorf("出错时不应发 response.completed")
+	}
+}
+
+func TestStreamLongLine(t *testing.T) {
+	// A single SSE line far larger than any fixed scanner buffer (e.g. a huge
+	// tool-call argument delta) must be forwarded, not kill the stream.
+	long := strings.Repeat("a", 2*1024*1024)
+	raw := "data: " + `{"choices":[{"delta":{"content":"` + long + `"}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
+		t.Fatalf("oversized line should stream fine, got: %v", err)
+	}
+	out := s.b.String()
+	if !strings.Contains(out, "event: response.completed") {
+		t.Errorf("missing response.completed, output prefix:\n%.200s", out)
+	}
+	if !strings.Contains(out, long) {
+		t.Error("oversized delta content should be forwarded verbatim")
 	}
 }
 

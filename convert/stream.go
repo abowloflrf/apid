@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -59,52 +60,64 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		"type": "response.in_progress", "response": st.openingResponse(),
 	})
 
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
+	// bufio.Reader (not Scanner) so a single long SSE line — e.g. a huge
+	// tool-call argument delta — can't overflow a fixed token limit and kill
+	// the stream. Same reading strategy as the raw forwarding path.
+	reader := bufio.NewReader(body)
+	for {
+		line, readErr := reader.ReadString('\n')
+		// Client gone (disconnect / shutdown): checked between read and process
+		// so a line arriving together with the cancellation is not converted and
+		// written to a client that can no longer receive it.
 		if err := ctx.Err(); err != nil {
 			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
 		}
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
+		if data, ok := strings.CutPrefix(line, "data:"); ok {
+			data = strings.TrimSpace(data)
+			if data == "[DONE]" {
+				break
+			}
+			// Upstream reported an error mid-stream: emit response.failed to
+			// the client and surface the error to the caller for logging/stats.
+			if msg := parseStreamError(data); msg != "" {
+				st.fail(msg)
+				return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt},
+					fmt.Errorf("upstream stream error: %s", msg)
+			}
+			if data != "" {
+				st.consumeChunk(data)
+			}
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			st.fail(readErr.Error())
+			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, readErr
 		}
-		if data == "[DONE]" {
-			break
-		}
-		// Upstream reported an error mid-stream: emit response.failed to the
-		// client and surface the error to the caller for logging/stats.
-		if msg := parseStreamError(data); msg != "" {
-			st.fail(msg)
-			return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt},
-				fmt.Errorf("upstream stream error: %s", msg)
-		}
-		var chunk protocol.ChatStreamChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-		if chunk.Usage != nil {
-			st.usage = chunk.Usage
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		if fr := chunk.Choices[0].FinishReason; fr != nil && *fr != "" {
-			st.finishReason = *fr
-		}
-		st.handleDelta(chunk.Choices[0].Delta)
-	}
-	if err := scanner.Err(); err != nil {
-		st.fail(err.Error())
-		return &StreamResult{Usage: st.usage, FirstTokenAt: st.firstTokenAt}, err
 	}
 
 	st.finish()
 	return st.result()
+}
+
+// consumeChunk parses one SSE data payload and feeds it into the stream state.
+// Malformed payloads are skipped so one bad chunk never kills the stream.
+func (st *streamState) consumeChunk(data string) {
+	var chunk protocol.ChatStreamChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return
+	}
+	if chunk.Usage != nil {
+		st.usage = chunk.Usage
+	}
+	if len(chunk.Choices) == 0 {
+		return
+	}
+	if fr := chunk.Choices[0].FinishReason; fr != nil && *fr != "" {
+		st.finishReason = *fr
+	}
+	st.handleDelta(chunk.Choices[0].Delta)
 }
 
 // newStreamUUID 生成不带连字符的 UUID，用作流式响应的 ID。

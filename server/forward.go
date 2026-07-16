@@ -1,17 +1,14 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/abowloflrf/apid/config"
 	"github.com/abowloflrf/apid/protocol"
 	"github.com/abowloflrf/apid/stats"
-	"github.com/abowloflrf/apid/trace"
 )
 
 // reqSniff reads only the top-level model / stream; both protocols share these
@@ -22,85 +19,85 @@ type reqSniff struct {
 }
 
 // forwardRaw handles a same-protocol route: forward the body verbatim, only
-// rewriting model when effModel is non-empty. stat.ClientModel/Stream are
+// rewriting model when ex.model is non-empty. stat.ClientModel/Stream are
 // already filled by handleRoute.
-func (s *Server) forwardRaw(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
-	fwdBody := bodyBytes
-	if effModel != "" {
-		b, err := overrideModel(bodyBytes, effModel)
+func (s *Server) forwardRaw(ex *exchange) {
+	fwdBody := ex.body
+	if ex.model != "" {
+		b, err := overrideModel(ex.body, ex.model)
 		if err != nil {
-			stat.Error = "override model: " + err.Error()
-			writeError(w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+			ex.stat.Error = "override model: " + err.Error()
+			writeError(ex.w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
 			return
 		}
 		fwdBody = b
-		if traceEntry != nil {
-			if path := traceEntry.Dump("upstream", fwdBody); path != "" {
+		if ex.trace != nil {
+			if path := ex.trace.Dump("upstream", fwdBody); path != "" {
 				s.log.Info("trace upstream request", "file", path)
 			}
 		}
 	}
 
-	resp, err := tg.client.ForwardWithQuery(r.Context(), fwdBody, r.Header, r.URL.RawQuery)
+	resp, err := ex.target.client.ForwardWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
 	if err != nil {
-		stat.Error = "upstream: " + err.Error()
-		writeError(w, http.StatusBadGateway, err.Error())
+		ex.stat.Error = "upstream: " + err.Error()
+		writeError(ex.w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
-	stat.UpstreamStatus = resp.StatusCode
+	ex.stat.UpstreamStatus = resp.StatusCode
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.passUpstreamError(w, resp, stat)
+		s.passUpstreamError(ex.w, resp, ex.stat)
 		return
 	}
 
-	if stat.Stream {
-		s.forwardStream(r.Context(), tg, w, resp, stat, start)
+	if ex.stat.Stream {
+		s.forwardStream(ex, resp)
 		return
 	}
-	forwardJSON(tg, w, resp, stat)
+	forwardJSON(ex, resp)
 }
 
 // forwardJSON forwards a non-stream response verbatim and parses usage by the
 // upstream protocol.
-func forwardJSON(tg *target, w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
+func forwardJSON(ex *exchange, resp *http.Response) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		stat.Error = "read upstream response: " + err.Error()
-		writeError(w, http.StatusBadGateway, "failed to read upstream response: "+err.Error())
+		ex.stat.Error = "read upstream response: " + err.Error()
+		writeError(ex.w, http.StatusBadGateway, "failed to read upstream response: "+err.Error())
 		return
 	}
-	stat.Usage = extractUsage(tg.cfg.Protocol, body)
+	ex.stat.Usage = extractUsage(ex.target.cfg.Protocol, body)
 
-	copyContentType(w, resp)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	copyContentType(ex.w, resp)
+	ex.w.WriteHeader(resp.StatusCode)
+	_, _ = ex.w.Write(body)
 }
 
 // forwardStream forwards an SSE response verbatim, tee-parsing usage and TTFT.
-func (s *Server) forwardStream(ctx context.Context, tg *target, w http.ResponseWriter, resp *http.Response, stat *stats.Record, start time.Time) {
-	flusher, ok := w.(http.Flusher)
+func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
+	flusher, ok := ex.w.(http.Flusher)
 	if !ok {
-		stat.Error = "streaming not supported"
-		writeError(w, http.StatusInternalServerError, "streaming not supported by server")
+		ex.stat.Error = "streaming not supported"
+		writeError(ex.w, http.StatusInternalServerError, "streaming not supported by server")
 		return
 	}
-	copyContentType(w, resp)
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(resp.StatusCode)
+	copyContentType(ex.w, resp)
+	ex.w.Header().Set("Cache-Control", "no-cache")
+	ex.w.Header().Set("Connection", "keep-alive")
+	ex.w.WriteHeader(resp.StatusCode)
 
-	usage, firstAt, err := forwardSSE(ctx, &sseWriter{w: w, f: flusher}, resp.Body, tg.cfg.Protocol)
+	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body, ex.target.cfg.Protocol)
 	if err != nil {
 		s.log.Warn("sse forward failed", "err", err)
-		stat.Error = "sse forward: " + err.Error()
+		ex.stat.Error = "sse forward: " + err.Error()
 	}
 	if usage != nil {
-		stat.Usage = usage
+		ex.stat.Usage = usage
 	}
 	if !firstAt.IsZero() {
-		stat.TTFT = firstAt.Sub(start)
+		ex.stat.TTFT = firstAt.Sub(ex.start)
 	}
 }
 

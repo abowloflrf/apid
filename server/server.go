@@ -3,7 +3,6 @@
 package server
 
 import (
-	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -24,11 +23,6 @@ import (
 	"github.com/abowloflrf/apid/upstream"
 )
 
-// route is a config entrypoint keyed by its exposed path.
-type route struct {
-	cfg config.Route
-}
-
 // target is a resolved upstream: its config plus a bound forwarding client,
 // shared across every route/model rule that references it.
 type target struct {
@@ -36,8 +30,21 @@ type target struct {
 	client *upstream.Client
 }
 
+// exchange bundles the per-request state threaded through the two forwarding
+// paths (raw forward / protocol conversion).
+type exchange struct {
+	target *target
+	model  string              // effective model override; "" = pass the client model through
+	w      http.ResponseWriter // wraps the client connection; records status for the access log
+	req    *http.Request       // inbound request; auth headers already scrubbed when client auth is on
+	body   []byte
+	trace  *trace.Entry
+	stat   *stats.Record
+	start  time.Time
+}
+
 type Server struct {
-	routes    map[string]*route
+	routes    map[string]config.Route
 	upstreams map[string]*target
 	log       *slog.Logger
 	tracer    *trace.Tracer
@@ -61,9 +68,9 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey, upstreamOptions(uc.Protocol)...),
 		}
 	}
-	routes := make(map[string]*route, len(cfg.Routes))
+	routes := make(map[string]config.Route, len(cfg.Routes))
 	for _, rc := range cfg.Routes {
-		routes[rc.Path] = &route{cfg: rc}
+		routes[rc.Path] = rc
 	}
 	var db *sql.DB
 	if st.Enabled() {
@@ -88,8 +95,8 @@ func upstreamOptions(proto config.Protocol) []upstream.Option {
 	return nil
 }
 
-func (s *Server) resolve(rt *route, model string) (*target, config.ModelRule) {
-	rule, ok := rt.cfg.Resolve(model)
+func (s *Server) resolve(rt config.Route, model string) (*target, config.ModelRule) {
+	rule, ok := rt.Resolve(model)
 	if !ok {
 		return nil, config.ModelRule{}
 	}
@@ -114,7 +121,7 @@ func (s *Server) Close() {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	for _, rt := range s.routes {
-		mux.HandleFunc("POST "+rt.cfg.Path, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("POST "+rt.Path, func(w http.ResponseWriter, r *http.Request) {
 			s.handleRoute(rt, w, r)
 		})
 	}
@@ -140,13 +147,13 @@ func (s *Server) Handler() http.Handler {
 
 // handleRoute is the shared orchestration: read body, sniff model, resolve the
 // target upstream, trace, collect stats, then dispatch to convert or raw forward.
-func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rec := &respRecorder{ResponseWriter: w}
 
 	stat := stats.Record{
 		Time:           start,
-		ClientProtocol: string(rt.cfg.InputProtocol),
+		ClientProtocol: string(rt.InputProtocol),
 		ClientPath:     r.URL.RequestURI(),
 		ClientUA:       r.UserAgent(),
 	}
@@ -198,7 +205,7 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 	effModel := effectiveModel(rule, tg.cfg)
 	stat.UpstreamProtocol = string(tg.cfg.Protocol)
 	stat.UpstreamURL = tg.client.Endpoint()
-	if rt.cfg.InputProtocol == tg.cfg.Protocol {
+	if rt.InputProtocol == tg.cfg.Protocol {
 		stat.UpstreamURL = tg.client.EndpointWithQuery(r.URL.RawQuery)
 	}
 	stat.UpstreamModel = sniff.Model
@@ -207,16 +214,26 @@ func (s *Server) handleRoute(rt *route, w http.ResponseWriter, r *http.Request) 
 	}
 
 	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
-	if path := traceEntry.Dump(string(rt.cfg.InputProtocol), bodyBytes); path != "" {
+	if path := traceEntry.Dump(string(rt.InputProtocol), bodyBytes); path != "" {
 		s.log.Info("trace request", "file", path)
 	}
 
+	ex := &exchange{
+		target: tg,
+		model:  effModel,
+		w:      rec,
+		req:    upstreamReq,
+		body:   bodyBytes,
+		trace:  traceEntry,
+		stat:   &stat,
+		start:  start,
+	}
 	// Same protocol on both ends => raw forward; otherwise convert.
-	if rt.cfg.InputProtocol == tg.cfg.Protocol {
-		s.forwardRaw(tg, effModel, rec, upstreamReq, bodyBytes, traceEntry, &stat, start)
+	if rt.InputProtocol == tg.cfg.Protocol {
+		s.forwardRaw(ex)
 		return
 	}
-	s.convertResponsesToChat(tg, effModel, rec, upstreamReq, bodyBytes, traceEntry, &stat, start)
+	s.convertResponsesToChat(ex)
 }
 
 func (s *Server) authorizeClient(w http.ResponseWriter, r *http.Request) bool {
@@ -317,18 +334,18 @@ func upstreamClientHeaders(src http.Header) http.Header {
 }
 
 // convertResponsesToChat handles a responses -> chat route.
-func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.ResponseWriter, r *http.Request, bodyBytes []byte, traceEntry *trace.Entry, stat *stats.Record, start time.Time) {
+func (s *Server) convertResponsesToChat(ex *exchange) {
 	var req protocol.ResponsesRequest
-	if err := json.Unmarshal(bodyBytes, &req); err != nil {
-		stat.Error = "parse request body: " + err.Error()
-		writeError(w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+	if err := json.Unmarshal(ex.body, &req); err != nil {
+		ex.stat.Error = "parse request body: " + err.Error()
+		writeError(ex.w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
 		return
 	}
 
 	chatReq, namespaces, err := convert.ResponsesToChat(&req, s.reasoning)
 	if err != nil {
-		stat.Error = "convert request: " + err.Error()
-		writeError(w, http.StatusBadRequest, err.Error())
+		ex.stat.Error = "convert request: " + err.Error()
+		writeError(ex.w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -336,50 +353,50 @@ func (s *Server) convertResponsesToChat(tg *target, effModel string, w http.Resp
 	// function_call 与 function_call_output 之间，移到 messages[0]。
 	chatReq.Messages = convert.FixSystemOrdering(chatReq.Messages)
 
-	if effModel != "" {
-		chatReq.Model = effModel
+	if ex.model != "" {
+		chatReq.Model = ex.model
 	}
-	stat.UpstreamModel = chatReq.Model
+	ex.stat.UpstreamModel = chatReq.Model
 
-	if traceEntry != nil {
+	if ex.trace != nil {
 		if chatBytes, err := json.Marshal(chatReq); err != nil {
 			s.log.Error("trace marshal chat request failed", "err", err)
-		} else if path := traceEntry.Dump("chat", chatBytes); path != "" {
+		} else if path := ex.trace.Dump("chat", chatBytes); path != "" {
 			s.log.Info("trace chat request", "file", path)
 		}
 	}
 
-	resp, err := tg.client.ChatCompletions(r.Context(), chatReq, r.Header)
+	resp, err := ex.target.client.ChatCompletions(ex.req.Context(), chatReq, ex.req.Header)
 	if err != nil {
-		stat.Error = "upstream: " + err.Error()
-		writeError(w, http.StatusBadGateway, err.Error())
+		ex.stat.Error = "upstream: " + err.Error()
+		writeError(ex.w, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
-	stat.UpstreamStatus = resp.StatusCode
+	ex.stat.UpstreamStatus = resp.StatusCode
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.passUpstreamError(w, resp, stat)
+		s.passUpstreamError(ex.w, resp, ex.stat)
 		return
 	}
 
 	if req.Stream {
-		s.streamResponse(r.Context(), w, resp.Body, req.Model, namespaces, stat, start)
+		s.streamResponse(ex, resp.Body, req.Model, namespaces)
 		return
 	}
-	s.jsonResponse(w, resp.Body, namespaces, stat)
+	s.jsonResponse(ex, resp.Body, namespaces)
 }
 
 // ---- 非流式 ----
 
-func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces map[string]convert.NamespacedTool, stat *stats.Record) {
+func (s *Server) jsonResponse(ex *exchange, body io.Reader, namespaces map[string]convert.NamespacedTool) {
 	var chatResp protocol.ChatResponse
 	if err := json.NewDecoder(body).Decode(&chatResp); err != nil {
-		stat.Error = "parse upstream response: " + err.Error()
-		writeError(w, http.StatusBadGateway, "failed to parse upstream response: "+err.Error())
+		ex.stat.Error = "parse upstream response: " + err.Error()
+		writeError(ex.w, http.StatusBadGateway, "failed to parse upstream response: "+err.Error())
 		return
 	}
-	stat.Usage = toStatsUsage(chatResp.Usage)
+	ex.stat.Usage = toStatsUsage(chatResp.Usage)
 
 	out := convert.ChatToResponses(&chatResp, namespaces)
 
@@ -389,39 +406,37 @@ func (s *Server) jsonResponse(w http.ResponseWriter, body io.Reader, namespaces 
 		s.saveReasoning(toolCallIDs(a.ToolCalls), a.Content, a.ReasoningContent)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(out); err != nil {
-		s.log.Warn("write response failed", "err", err)
-	}
+	s.writeJSON(ex.w, out)
 }
 
 // ---- 流式 ----
 
 // streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流，完成后回写 reasoning 缓存。
-func (s *Server) streamResponse(ctx context.Context, w http.ResponseWriter, body io.Reader, model string, namespaces map[string]convert.NamespacedTool, stat *stats.Record, start time.Time) {
-	flusher, ok := w.(http.Flusher)
+// clientModel 是回显给客户端的 model（Responses 响应回显请求里的 model）。
+func (s *Server) streamResponse(ex *exchange, body io.Reader, clientModel string, namespaces map[string]convert.NamespacedTool) {
+	flusher, ok := ex.w.(http.Flusher)
 	if !ok {
-		stat.Error = "streaming not supported"
-		writeError(w, http.StatusInternalServerError, "streaming not supported by server")
+		ex.stat.Error = "streaming not supported"
+		writeError(ex.w, http.StatusInternalServerError, "streaming not supported by server")
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
+	ex.w.Header().Set("Content-Type", "text/event-stream")
+	ex.w.Header().Set("Cache-Control", "no-cache")
+	ex.w.Header().Set("Connection", "keep-alive")
+	ex.w.WriteHeader(http.StatusOK)
 
-	sw := &sseWriter{w: w, f: flusher}
-	result, err := convert.StreamChatToResponses(ctx, sw, body, model, namespaces)
+	sw := &sseWriter{w: ex.w, f: flusher}
+	result, err := convert.StreamChatToResponses(ex.req.Context(), sw, body, clientModel, namespaces)
 	if err != nil {
 		s.log.Warn("stream conversion failed", "err", err)
-		stat.Error = "stream conversion: " + err.Error()
+		ex.stat.Error = "stream conversion: " + err.Error()
 	}
 	if result != nil {
 		if result.Usage != nil {
-			stat.Usage = toStatsUsage(result.Usage)
+			ex.stat.Usage = toStatsUsage(result.Usage)
 		}
 		if !result.FirstTokenAt.IsZero() {
-			stat.TTFT = result.FirstTokenAt.Sub(start)
+			ex.stat.TTFT = result.FirstTokenAt.Sub(ex.start)
 		}
 		// 回写 reasoning 缓存，供下轮重放回填。
 		s.saveReasoning(result.ToolCallIDs, result.ContentText, result.ReasoningText)
