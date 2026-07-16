@@ -24,8 +24,12 @@ Thumbs.db
 # Runtime data (not needed for build)
 data/
 
-# Trace dumps
-trace/
+# Trace dumps (APID_TRACE writes to ./logs; trace/ is the Go package, keep it)
+logs/
+
+# Local build outputs
+/apid
+*.exe
 
 # Temp files
 tmp/
