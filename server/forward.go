@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,31 @@ import (
 type reqSniff struct {
 	Model  string `json:"model"`
 	Stream bool   `json:"stream"`
+}
+
+// Limits for body reads. These guard against memory exhaustion from
+// abnormally large or malicious payloads; normal LLM requests are well
+// under these thresholds.
+const (
+	maxRequestBody   = 10 * 1024 * 1024 // 10 MB - client request body
+	maxResponseBody  = 10 * 1024 * 1024 // 10 MB - upstream non-stream response body
+	maxErrorBodySize = 1 * 1024 * 1024  // 1 MB  - upstream error response body
+)
+
+var errBodyTooLarge = errors.New("body exceeds size limit")
+
+// readLimited reads at most max bytes from r. If the source contains more
+// than max bytes, it returns the first max bytes (truncated) and
+// errBodyTooLarge so callers can distinguish truncation from a normal EOF.
+func readLimited(r io.Reader, max int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return body, err
+	}
+	if int64(len(body)) > max {
+		return body[:max], errBodyTooLarge
+	}
+	return body, nil
 }
 
 // forwardRaw handles a same-protocol route: forward the body verbatim, only
@@ -62,8 +88,13 @@ func (s *Server) forwardRaw(ex *exchange) {
 // forwardJSON forwards a non-stream response verbatim and parses usage by the
 // upstream protocol.
 func forwardJSON(ex *exchange, resp *http.Response) {
-	body, err := io.ReadAll(resp.Body)
+	body, err := readLimited(resp.Body, maxResponseBody)
 	if err != nil {
+		if err == errBodyTooLarge {
+			ex.stat.Error = "upstream response exceeds size limit"
+			writeError(ex.w, http.StatusBadGateway, "upstream response too large")
+			return
+		}
 		ex.stat.Error = "read upstream response: " + err.Error()
 		writeError(ex.w, http.StatusBadGateway, "failed to read upstream response: "+err.Error())
 		return

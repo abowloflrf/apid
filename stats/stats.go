@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abowloflrf/apid/store"
@@ -61,7 +62,9 @@ type Recorder struct {
 	db        *sql.DB
 	log       *slog.Logger
 	ch        chan Record
+	closed    atomic.Bool
 	closeOnce sync.Once
+	stop      chan struct{}
 	done      chan struct{}
 }
 
@@ -83,6 +86,7 @@ func NewRecorder(st *store.Store, buffer int, logger *slog.Logger) *Recorder {
 		db:   st.DB(),
 		log:  logger,
 		ch:   make(chan Record, buffer),
+		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
 	go r.run()
@@ -92,7 +96,7 @@ func NewRecorder(st *store.Store, buffer int, logger *slog.Logger) *Recorder {
 // Record 非阻塞地提交一条记录。channel 满时丢弃并打印 warning，
 // 保证请求热路径在 IO 抖动时也不阻塞。
 func (r *Recorder) Record(rec Record) {
-	if r == nil {
+	if r == nil || r.closed.Load() {
 		return
 	}
 	select {
@@ -110,7 +114,8 @@ func (r *Recorder) Close() {
 		return
 	}
 	r.closeOnce.Do(func() {
-		close(r.ch)
+		r.closed.Store(true)
+		close(r.stop)
 		<-r.done
 	})
 }
@@ -134,14 +139,27 @@ func (r *Recorder) run() {
 
 	for {
 		select {
-		case rec, ok := <-r.ch:
-			if !ok {
-				flush()
-				return
-			}
+		case rec := <-r.ch:
 			buf = append(buf, rec)
 			if len(buf) >= batchSize {
 				flush()
+			}
+		case <-r.stop:
+			// Drain any records already in the channel before exiting.
+			// New sends are blocked by the closed flag checked in Record;
+			// a record in-flight between the check and the send lands here
+			// or is silently dropped-never a panic, since ch is not closed.
+			for {
+				select {
+				case rec := <-r.ch:
+					buf = append(buf, rec)
+					if len(buf) >= batchSize {
+						flush()
+					}
+				default:
+					flush()
+					return
+				}
 			}
 		case <-ticker.C:
 			flush()

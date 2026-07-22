@@ -108,8 +108,10 @@ func run(logger *slog.Logger, configPath string) error {
 
 	srv := server.New(cfg, st, logger)
 	httpServer := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: srv.Handler(),
+		Addr:              cfg.Listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)

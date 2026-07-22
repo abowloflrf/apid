@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -22,6 +23,12 @@ import (
 	"github.com/abowloflrf/apid/trace"
 	"github.com/abowloflrf/apid/upstream"
 )
+
+// nonStreamTimeout caps the total duration of a non-streaming upstream
+// request (connect + send + wait-for-headers + read-body). Streaming
+// requests are exempt because they may stay open for many minutes (see
+// newTransport).
+const nonStreamTimeout = 300 * time.Second
 
 // target is a resolved upstream: its config plus a bound forwarding client,
 // shared across every route/model rule that references it.
@@ -184,8 +191,13 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		upstreamReq.Header = upstreamClientHeaders(r.Header)
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := readLimited(r.Body, maxRequestBody)
 	if err != nil {
+		if err == errBodyTooLarge {
+			stat.Error = "request body exceeds size limit"
+			writeError(rec, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			return
+		}
 		stat.Error = "read request body: " + err.Error()
 		writeError(rec, http.StatusBadRequest, "failed to read request body: "+err.Error())
 		return
@@ -195,6 +207,14 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	_ = json.Unmarshal(bodyBytes, &sniff)
 	stat.ClientModel = sniff.Model
 	stat.Stream = sniff.Stream
+
+	// Non-streaming requests get a hard cap so a hung upstream can't pin a
+	// goroutine forever. Streaming requests stay uncapped (see newTransport).
+	if !sniff.Stream {
+		ctx, cancel := context.WithTimeout(upstreamReq.Context(), nonStreamTimeout)
+		defer cancel()
+		upstreamReq = upstreamReq.WithContext(ctx)
+	}
 
 	tg, rule := s.resolve(rt, sniff.Model)
 	if tg == nil {
@@ -472,7 +492,7 @@ func toolCallIDs(calls []protocol.ChatToolCall) []string {
 // ---- 通用辅助 ----
 
 func (s *Server) passUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
-	errBody, _ := io.ReadAll(resp.Body)
+	errBody, _ := readLimited(resp.Body, maxErrorBodySize)
 	s.log.Warn("upstream error", "status", resp.StatusCode, "body", string(errBody))
 	stat.Error = truncate(string(errBody), 512)
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
