@@ -1,0 +1,24 @@
+# 构建 apid 镜像并推送到 CNB 平台内置制品库(${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE})
+# main 分支 push -> latest;v* tag push -> 与 tag 同名的镜像 tag
+
+main:
+  push:
+    - services:
+        - docker
+      stages:
+        - name: Docker build
+          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest .
+        - name: Docker push
+          script: docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:latest
+
+v*:
+  tag_push:
+    - services:
+        - docker
+      stages:
+        - name: Docker build
+          script: docker build -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:${CNB_BRANCH} .
+        - name: Docker push
+          script: docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}:${CNB_BRANCH}
+
+# 更多资料见 https://docs.cnb.cool/build/quick-start.html
