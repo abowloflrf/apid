@@ -14,6 +14,7 @@ services:
     # Host network: APID_LISTEN port (default :19092) is exposed directly on the host.
     network_mode: host
     environment:
+      TZ: Asia/Shanghai
       # Listen address; with host networking this binds straight to the host.
       APID_LISTEN: ":19092"
       # Collect token/perf metrics into SQLite. Persisted via the volume below.
