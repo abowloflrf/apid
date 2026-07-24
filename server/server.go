@@ -146,8 +146,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /stats/requests", s.handleStatsRequests)
 	mux.HandleFunc("GET /stats/options", s.handleStatsOptions)
 	mux.Handle("GET /stats/", s.statsUIHandler())
-	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/stats/", http.StatusMovedPermanently)
+	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, _ *http.Request) {
+		// Relative redirect so it still lands on /stats/ when apid is mounted
+		// under a reverse-proxy subpath; an absolute "/stats/" would drop the
+		// prefix. The browser resolves it against the request URL it used.
+		w.Header().Set("Location", "stats/")
+		w.WriteHeader(http.StatusMovedPermanently)
 	})
 	return s.withClientAuth(mux)
 }

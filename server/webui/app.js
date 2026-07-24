@@ -4,7 +4,11 @@
 // charts and sortable tables. All aggregation happens server-side; this file is
 // purely presentation + filter state.
 
-const API = "/stats";
+// API base = the directory this page is served from, so the /stats/* JSON
+// endpoints resolve whether apid runs at the root or under a reverse-proxy
+// subpath (e.g. /apid/stats/). Depends on the trailing-slash page URL, which
+// the server's /stats -> /stats/ redirect guarantees.
+const API = new URL(".", document.baseURI).href.replace(/\/+$/, "");
 // Muted palette tuned for the warm-paper theme — desaturated, harmonious, never
 // neon. Mirrors the CSS custom properties so chrome and data read as one piece.
 const C = {

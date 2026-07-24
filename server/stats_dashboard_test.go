@@ -132,6 +132,20 @@ func TestDashboardRoutingPrecedence(t *testing.T) {
 	}
 }
 
+// The /stats -> /stats/ redirect must be relative so it survives being mounted
+// under a reverse-proxy subpath; an absolute "/stats/" would drop the prefix.
+func TestStatsRedirectIsRelative(t *testing.T) {
+	h := seedServer(t).Handler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/stats", nil))
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("/stats status = %d, want 301", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "stats/" {
+		t.Errorf("Location = %q, want relative %q", loc, "stats/")
+	}
+}
+
 func TestDashboardDisabled(t *testing.T) {
 	srv := New(config.Config{}, nil, nil) // storage off
 	for _, p := range []string{"/stats/summary", "/stats/by_model", "/stats/timeseries", "/stats/requests", "/stats/options", "/stats/"} {
