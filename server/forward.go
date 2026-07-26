@@ -121,8 +121,24 @@ func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
 
 	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body, ex.target.cfg.Protocol)
 	if err != nil {
-		s.log.Warn("sse forward failed", "err", err)
-		ex.stat.Error = "sse forward: " + err.Error()
+		switch {
+		case errors.Is(err, errClientGone):
+			// Stream already completed; client disconnected while draining the
+			// tail. Benign - must not be recorded as an error (it would pollute
+			// the error rate even though upstream succeeded).
+			s.log.Debug("stream completed but client disconnected during drain",
+				"model", ex.stat.UpstreamModel)
+		case errors.Is(err, errClientAborted):
+			// Client disconnected before the stream finished. Not an upstream
+			// fault, but the request did not complete - record it with a
+			// distinct message instead of the upstream "sse forward" prefix.
+			s.log.Info("stream aborted by client before completion",
+				"model", ex.stat.UpstreamModel)
+			ex.stat.Error = "client aborted"
+		default:
+			s.log.Warn("sse forward failed", "err", err)
+			ex.stat.Error = "sse forward: " + err.Error()
+		}
 	}
 	if usage != nil {
 		ex.stat.Usage = usage
