@@ -34,6 +34,7 @@ const state = {
   errorsOnly: false,
   limit: 100,
   auto: false,
+  view: "stats", // stats | routes
 };
 
 const modelColor = {}; // model name -> stable color
@@ -649,6 +650,241 @@ async function loadAll() {
   }
 }
 
+// ---- routes view (config topology) ----
+// Draws GET /stats/topology: entrypoint cards on the left, upstream cards on the
+// right, one SVG curve per model rule across the gutter. The config is static,
+// so it is fetched once and only redrawn on resize/view change.
+
+const PROTO_SHORT = {
+  openai_responses: "responses",
+  openai_chat_completions: "chat",
+  anthropic_messages: "anthropic",
+};
+const protoShort = (p) => PROTO_SHORT[p] || p;
+
+// Upstream colors live in their own scale: the model palette is keyed by model
+// name and reusing it here would tint two unrelated things the same.
+const upstreamColor = {};
+function upColorFor(name) {
+  if (!(name in upstreamColor)) {
+    upstreamColor[name] = PALETTE[(Object.keys(upstreamColor).length * 3 + 1) % PALETTE.length];
+  }
+  return upstreamColor[name];
+}
+
+let topoData = null;
+
+async function loadTopology(force) {
+  if (topoData && !force) { renderTopology(topoData); return; }
+  try {
+    const t = await fetch(`${API}/topology`).then((r) => r.json());
+    topoData = t;
+    (t.upstreams || []).forEach((u) => upColorFor(u.name));
+    renderTopology(t);
+  } catch (e) {
+    toast("topology: " + e.message);
+  }
+}
+
+function chip(label, value, on) {
+  return `<span class="topo-chip ${on ? "on" : "off"}"><span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(value)}</span></span>`;
+}
+
+function renderTopoMeta(t) {
+  const chips = [
+    chip("listen", t.listen || "—", true),
+    chip("routes", String((t.routes || []).length), true),
+    chip("upstreams", String((t.upstreams || []).length), true),
+    chip("client auth", t.client_auth ? "on" : "off", t.client_auth),
+    chip("trace", t.trace ? "on" : "off", t.trace),
+    chip("storage", t.storage ? "on" : "off", t.storage),
+    t.search ? chip("search", `${t.search.provider} ${t.search.path}`, true) : chip("search", "off", false),
+  ];
+  document.getElementById("topoMeta").innerHTML = chips.join("");
+}
+
+// modelTag says which model id actually leaves apid, and where that decision was
+// made — the three sources are indistinguishable from the rule text alone.
+function modelTag(r) {
+  if (r.model_source === "passthrough") {
+    return `<span class="model-tag pass" title="client's model is forwarded unchanged">client model</span>`;
+  }
+  const from = r.model_source === "rule" ? "rewritten by this rule" : "inherited from the upstream's model";
+  return `<span class="model-tag" title="${escapeAttr(from)}">→ <b>${escapeHtml(r.effective_model)}</b></span>`;
+}
+
+function ruleRow(r, key) {
+  if (r.broken) {
+    return `<li class="rule broken"><span class="match">${escapeHtml(r.match || "*")}</span>
+      <span class="spacer"></span><span class="model-tag">undefined upstream <b>${escapeHtml(r.upstream)}</b></span></li>`;
+  }
+  const modeTitle = r.mode === "convert"
+    ? `converted: ${r.upstream_protocol} spoken upstream`
+    : "same protocol on both ends — bytes forwarded as-is";
+  return `<li class="rule" data-key="${escapeAttr(key)}" data-up="${escapeAttr(r.upstream)}">
+    <span class="match ${r.match_kind === "catchall" ? "catchall" : ""}">${escapeHtml(r.match || "*")}</span>
+    <span class="kind">${r.match_kind}</span>
+    <span class="spacer"></span>
+    ${modelTag(r)}
+    <span class="mode ${r.mode}" title="${escapeAttr(modeTitle)}">${r.mode}</span>
+    <span class="up-name">${escapeHtml(r.upstream)}</span>
+    <span class="anchor" style="background:${upColorFor(r.upstream)}"></span>
+  </li>`;
+}
+
+function routeCard(rt, i) {
+  const rules = (rt.rules || []).map((r, j) => ruleRow(r, `${i}-${j}`)).join("");
+  return `<article class="topo-card route">
+    <div class="tc-head">
+      <span class="method">POST</span>
+      <span class="path">${escapeHtml(rt.path)}</span>
+      <span class="pill proto" title="${escapeAttr(rt.input_protocol)}">${protoShort(rt.input_protocol)}</span>
+    </div>
+    <ul class="rules">${rules}</ul>
+  </article>`;
+}
+
+const AUTH_LABEL = {
+  api_key: "own api_key",
+  passthrough: "client credentials",
+  stripped: "none — client key is stripped",
+};
+
+function upstreamCard(u) {
+  const auth = AUTH_LABEL[u.auth] || u.auth;
+  const meta = [
+    `<span><span class="k">model</span> ${u.model ? `<code>${escapeHtml(u.model)}</code>` : `<code>passthrough</code>`}</span>`,
+    `<span><span class="k">auth</span> <code title="${escapeAttr(u.auth_header || "")}">${escapeHtml(auth)}</code></span>`,
+    `<span><span class="k">rules</span> <code>${u.ref_count}</code></span>`,
+  ].join("");
+  return `<article class="topo-card upstream" data-up="${escapeAttr(u.name)}">
+    <div class="tc-head">
+      <span class="dot" style="background:${upColorFor(u.name)}"></span>
+      <span class="name">${escapeHtml(u.name)}</span>
+      <span class="pill proto" title="${escapeAttr(u.protocol)}">${protoShort(u.protocol)}</span>
+    </div>
+    <div class="tc-endpoint" title="${escapeAttr(u.endpoint || "")}">${escapeHtml(u.endpoint || "")}</div>
+    <div class="tc-meta">${meta}</div>
+  </article>`;
+}
+
+function renderTopology(t) {
+  renderTopoMeta(t);
+  document.getElementById("topoRoutes").innerHTML = (t.routes || []).map(routeCard).join("");
+  document.getElementById("topoUpstreams").innerHTML = (t.upstreams || []).map(upstreamCard).join("");
+  document.getElementById("topoLegend").innerHTML = `
+    <span class="lg"><span class="swatch-line"></span> forward — same protocol, raw bytes</span>
+    <span class="lg"><span class="swatch-line dashed"></span> convert — responses → chat</span>
+    <span class="lg">match order: exact › glob › catch-all</span>`;
+  wireTopoHover();
+  drawTopoLinks();
+}
+
+// ---- topology links ----
+function topoAnchorPoints() {
+  const graph = document.getElementById("topoGraph");
+  const gb = graph.getBoundingClientRect();
+  const rules = [...graph.querySelectorAll(".rule[data-up]")];
+  // Group by upstream so each card's left edge can hand out evenly spaced entry
+  // ports instead of piling every curve onto one point.
+  const byUp = new Map();
+  for (const li of rules) {
+    const a = li.querySelector(".anchor").getBoundingClientRect();
+    const item = { el: li, up: li.dataset.up, key: li.dataset.key, x: a.right - gb.left, y: a.top + a.height / 2 - gb.top };
+    if (!byUp.has(item.up)) byUp.set(item.up, []);
+    byUp.get(item.up).push(item);
+  }
+  const out = [];
+  for (const [up, items] of byUp) {
+    const card = graph.querySelector(`.topo-card.upstream[data-up="${CSS.escape(up)}"]`);
+    if (!card) continue;
+    const cb = card.getBoundingClientRect();
+    // Sort by source height so ports stay in the same vertical order as the
+    // rules feeding them — fewer crossings, easier to trace by eye.
+    items.sort((a, b) => a.y - b.y);
+    items.forEach((it, i) => {
+      out.push({
+        ...it,
+        tx: cb.left - gb.left,
+        ty: cb.top - gb.top + (cb.height * (i + 1)) / (items.length + 1),
+      });
+    });
+  }
+  return out;
+}
+
+function drawTopoLinks() {
+  const svg = document.getElementById("topoLinks");
+  const graph = document.getElementById("topoGraph");
+  if (!topoData || document.getElementById("routesView").hidden) return;
+  if (getComputedStyle(svg).display === "none") { svg.innerHTML = ""; return; } // stacked layout
+  const gb = graph.getBoundingClientRect();
+  svg.setAttribute("viewBox", `0 0 ${gb.width} ${gb.height}`);
+  svg.setAttribute("width", gb.width);
+  svg.setAttribute("height", gb.height);
+
+  const modes = {}; // rule key -> forward|convert, keyed the same way ruleRow does
+  (topoData.routes || []).forEach((rt, i) => (rt.rules || []).forEach((r, j) => { modes[`${i}-${j}`] = r.mode; }));
+  svg.innerHTML = topoAnchorPoints().map((p) => {
+    const dx = Math.max(40, (p.tx - p.x) * 0.5);
+    const d = `M ${p.x} ${p.y} C ${p.x + dx} ${p.y}, ${p.tx - dx} ${p.ty}, ${p.tx} ${p.ty}`;
+    const convert = modes[p.key] === "convert";
+    return `<path d="${d}" data-key="${escapeAttr(p.key)}" data-up="${escapeAttr(p.up)}"
+      stroke="${upColorFor(p.up)}" stroke-width="1.5" opacity=".5"
+      ${convert ? 'stroke-dasharray="5 4"' : ""} />`;
+  }).join("");
+}
+
+// setTopoFocus dims everything unrelated to one rule or one upstream, so a
+// single hover answers "what feeds this backend" / "where does this model go".
+function setTopoFocus(sel) {
+  const graph = document.getElementById("topoGraph");
+  const paths = [...document.querySelectorAll("#topoLinks path")];
+  const cards = [...graph.querySelectorAll(".topo-card.upstream")];
+  const rules = [...graph.querySelectorAll(".rule[data-up]")];
+  if (!sel) {
+    paths.forEach((p) => p.classList.remove("hot", "dim"));
+    cards.forEach((c) => c.classList.remove("hot", "dim"));
+    rules.forEach((r) => r.classList.remove("dim"));
+    return;
+  }
+  const hit = (el) => (sel.key ? el.dataset.key === sel.key : el.dataset.up === sel.up);
+  paths.forEach((p) => { const on = hit(p); p.classList.toggle("hot", on); p.classList.toggle("dim", !on); });
+  cards.forEach((c) => { const on = c.dataset.up === sel.up; c.classList.toggle("hot", on); c.classList.toggle("dim", !on); });
+  rules.forEach((r) => r.classList.toggle("dim", !hit(r)));
+}
+
+function wireTopoHover() {
+  const graph = document.getElementById("topoGraph");
+  graph.querySelectorAll(".rule[data-up]").forEach((li) => {
+    li.onmouseenter = () => setTopoFocus({ key: li.dataset.key, up: li.dataset.up });
+    li.onmouseleave = () => setTopoFocus(null);
+  });
+  graph.querySelectorAll(".topo-card.upstream").forEach((card) => {
+    card.onmouseenter = () => setTopoFocus({ up: card.dataset.up });
+    card.onmouseleave = () => setTopoFocus(null);
+  });
+}
+
+let redrawPending = false;
+function scheduleTopoRedraw() {
+  if (redrawPending) return;
+  redrawPending = true;
+  requestAnimationFrame(() => { redrawPending = false; drawTopoLinks(); });
+}
+
+// ---- view switching ----
+function setView(view) {
+  state.view = view;
+  document.getElementById("statsView").hidden = view !== "stats";
+  document.getElementById("routesView").hidden = view !== "routes";
+  document.body.classList.toggle("view-routes", view === "routes");
+  document.getElementById("viewLabel").textContent = view;
+  document.querySelectorAll("#viewTabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+  if (location.hash.slice(1) !== view) history.replaceState(null, "", view === "stats" ? "#" : "#routes");
+  if (view === "routes") loadTopology();
+}
+
 // ---- wiring ----
 function setRange(range) {
   state.range = range;
@@ -687,7 +923,16 @@ function setupEvents() {
 
   document.getElementById("errorsOnly").onchange = (e) => { state.errorsOnly = e.target.checked; loadAll(); };
   document.getElementById("limitSelect").onchange = (e) => { state.limit = +e.target.value; loadAll(); };
-  document.getElementById("refreshBtn").onclick = () => loadAll();
+  document.getElementById("refreshBtn").onclick = () => (state.view === "routes" ? loadTopology(true) : loadAll());
+
+  document.querySelectorAll("#viewTabs button").forEach((b) => {
+    b.onclick = () => setView(b.dataset.view);
+  });
+  window.addEventListener("hashchange", () => setView(location.hash === "#routes" ? "routes" : "stats"));
+  // Curve endpoints are measured from laid-out DOM, so anything that reflows the
+  // cards (window resize, wrapping text, fonts settling) has to redraw them.
+  window.addEventListener("resize", scheduleTopoRedraw);
+  new ResizeObserver(scheduleTopoRedraw).observe(document.getElementById("topoGraph"));
 
   document.querySelector("#reqModal .modal-close").onclick = closeReqModal;
   document.querySelector("#reqModal .modal-backdrop").onclick = closeReqModal;
@@ -696,7 +941,7 @@ function setupEvents() {
   document.getElementById("autoRefresh").onchange = (e) => {
     state.auto = e.target.checked;
     if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-    if (state.auto) autoTimer = setInterval(loadAll, 30000);
+    if (state.auto) autoTimer = setInterval(() => { if (state.view === "stats") loadAll(); }, 30000);
   };
 }
 
@@ -705,6 +950,7 @@ async function init() {
   renderKPISkeletons();
   setRange("24h");
   setupEvents();
+  setView(location.hash === "#routes" ? "routes" : "stats");
 
   await loadOptions();
   await loadAll();

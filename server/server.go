@@ -52,6 +52,7 @@ type exchange struct {
 }
 
 type Server struct {
+	cfg             config.Config // as loaded, kept for the read-only topology endpoint
 	routes          map[string]config.Route
 	upstreams       map[string]*target
 	log             *slog.Logger
@@ -87,6 +88,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		db = st.DB()
 	}
 	return &Server{
+		cfg:             cfg,
 		routes:          routes,
 		upstreams:       upstreams,
 		log:             logger,
@@ -179,6 +181,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /stats/timeseries", s.handleStatsTimeSeries)
 	mux.HandleFunc("GET /stats/requests", s.handleStatsRequests)
 	mux.HandleFunc("GET /stats/options", s.handleStatsOptions)
+	// Config topology: read-only view of the loaded routes/upstreams. Unlike the
+	// stats API it works without storage, since it reads config, not the DB.
+	mux.HandleFunc("GET /stats/topology", s.handleTopology)
 	mux.Handle("GET /stats/", s.statsUIHandler())
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, _ *http.Request) {
 		// Relative redirect so it still lands on /stats/ when apid is mounted

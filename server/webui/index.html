@@ -12,7 +12,11 @@
   <header class="topbar">
     <div class="brand">
       <span class="logo">apid</span>
-      <span class="sub">stats</span>
+      <span class="sub" id="viewLabel">stats</span>
+    </div>
+    <div class="seg views" id="viewTabs">
+      <button data-view="stats" class="active">stats</button>
+      <button data-view="routes">routes</button>
     </div>
     <div class="ranges" id="rangePresets">
       <button data-range="1h">1h</button>
@@ -51,6 +55,7 @@
   </div>
 
   <main>
+    <div id="statsView">
     <section class="kpis" id="kpis"></section>
 
     <section class="charts">
@@ -106,6 +111,18 @@
         </table>
       </div>
     </section>
+    </div>
+
+    <!-- Routes view: the loaded config drawn as entrypoint -> model rule -> upstream. -->
+    <div id="routesView" hidden>
+      <section class="topo-bar" id="topoMeta"></section>
+      <section class="topo-graph" id="topoGraph">
+        <div class="topo-col" id="topoRoutes"></div>
+        <svg class="topo-links" id="topoLinks" aria-hidden="true"></svg>
+        <div class="topo-col" id="topoUpstreams"></div>
+      </section>
+      <section class="topo-legend" id="topoLegend"></section>
+    </div>
   </main>
 
   <div id="toast" class="toast"></div>

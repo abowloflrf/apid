@@ -98,6 +98,7 @@ repeatable/comma-separated `model` & `protocol`):
 | `GET /stats/requests` | recent request detail (`limit`, `offset`, `errors_only`) |
 | `GET /stats/options` | distinct models / protocols + time span (filter UI) |
 | `GET /stats/daily` | per-day aggregation for Grafana Infinity |
+| `GET /stats/topology` | loaded routes/upstreams graph, secrets redacted (needs no `APID_DB`) |
 
 Also `GET /healthz`.
 

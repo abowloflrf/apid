@@ -385,6 +385,114 @@ body.loading .skel-fill { display: block; }
   body.intro .table-card { animation-delay: .16s; }
 }
 
+/* ---- Routes view (config topology) ----
+   Two columns of cards — entrypoints on the left, upstreams on the right — with
+   an SVG layer drawing one curve per model rule across the gutter between them.
+   The curve, not the text, is what makes "which model goes where" legible at a
+   glance; everything else stays in the same quiet vocabulary as the stats view. */
+
+/* The time filters/bucket controls mean nothing for a static config. */
+body.view-routes .filters { display: none; }
+
+.topo-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 18px;
+}
+.topo-chip {
+  display: inline-flex; align-items: baseline; gap: 7px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 20px;
+  padding: 5px 12px; font-size: 11.5px; font-family: var(--mono); color: var(--text);
+}
+.topo-chip .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; color: var(--muted-2); font-family: var(--sans); }
+.topo-chip.off { color: var(--muted-2); }
+.topo-chip.on .v { color: var(--text-strong); font-weight: 600; }
+
+.topo-graph {
+  position: relative;
+  display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 130px;
+  align-items: start;
+}
+.topo-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* The link layer floats above the gutter but must never eat pointer events —
+   hover highlighting is driven by the cards underneath. */
+.topo-links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.topo-links path { fill: none; stroke-linecap: round; transition: stroke-width .15s, opacity .15s; }
+.topo-links path.dim { opacity: .12; }
+.topo-links path.hot { stroke-width: 2.4px; opacity: 1; }
+
+.topo-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; transition: border-color .18s ease, box-shadow .18s ease;
+  min-width: 0;
+}
+.topo-card:hover, .topo-card.hot { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.topo-card.dim { opacity: .45; }
+
+.tc-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 4px; }
+.tc-head .method {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .6px;
+  color: var(--muted); background: var(--panel-2); border-radius: 5px; padding: 2px 6px;
+}
+.tc-head .path, .tc-head .name {
+  font-family: var(--mono); font-size: 13.5px; font-weight: 600; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.tc-endpoint {
+  font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px;
+}
+.tc-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+.tc-meta .k { color: var(--muted-2); }
+.tc-meta code { font-family: var(--mono); color: var(--text); }
+
+/* Rules: one row per [[route.model]], read left to right as
+   match -> effective model -> upstream, ending at the anchor the curve leaves from. */
+.rules { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.rule {
+  display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px;
+  border-top: 1px solid var(--border); font-size: 12px; position: relative;
+  transition: background .12s;
+}
+.rule:hover { background: var(--panel-2); }
+.rule .match {
+  font-family: var(--mono); font-weight: 600; color: var(--text-strong);
+  max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rule .match.catchall { color: var(--muted); font-weight: 500; }
+.rule .kind {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .5px; font-weight: 700;
+  color: var(--muted-2); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px;
+}
+.rule .to { color: var(--muted-2); font-family: var(--mono); }
+.rule .up-name { font-family: var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule .spacer { flex: 1; }
+/* The dot the curve departs from, tinted with the target upstream's color. */
+.rule .anchor { width: 9px; height: 9px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px var(--panel); }
+.rule.broken { background: rgba(192, 123, 115, .1); }
+
+.mode {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+  border-radius: 5px; padding: 1px 6px; flex: none;
+}
+.mode.forward { background: rgba(111, 149, 118, .16); color: #4d7758; }
+.mode.convert { background: rgba(187, 154, 85, .18); color: #8a6f2f; }
+
+.model-tag { font-family: var(--mono); font-size: 11px; color: var(--muted); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-tag b { color: var(--text-strong); font-weight: 600; }
+.model-tag.pass { font-style: italic; }
+
+.topo-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 22px; font-size: 11px; color: var(--muted); }
+.topo-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.topo-legend .swatch-line { width: 22px; height: 0; border-top: 2px solid var(--muted-2); }
+.topo-legend .swatch-line.dashed { border-top-style: dashed; }
+
+/* Below two comfortable columns, stack them and drop the curves — the rule rows
+   already name their upstream, so nothing is lost but the drawing. */
+@media (max-width: 1080px) {
+  .topo-graph { grid-template-columns: 1fr; gap: 14px; }
+  .topo-links { display: none; }
+  .rule .anchor { display: none; }
+}
+
 /* scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
