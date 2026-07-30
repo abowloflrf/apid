@@ -5,6 +5,10 @@ services:
       # Build with host networking so `go mod download` reuses the host's
       # network/DNS/proxy (proxy.golang.org is otherwise unreachable here).
       network: host
+      args:
+        # Compile-time flag: json/v2 engine for encoding/json (v1 semantics).
+        # Set to "" to fall back to the stock v1 implementation.
+        GOEXPERIMENT: jsonv2
     image: apid:latest
     container_name: apid
     restart: unless-stopped
