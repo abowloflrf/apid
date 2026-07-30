@@ -16,6 +16,7 @@
     </div>
     <div class="seg views" id="viewTabs">
       <button data-view="stats" class="active">stats</button>
+      <button data-view="live">live<span class="tab-badge" id="liveBadge" hidden></span></button>
       <button data-view="routes">routes</button>
     </div>
     <div class="ranges" id="rangePresets">
@@ -111,6 +112,23 @@
         </table>
       </div>
     </section>
+    </div>
+
+    <!-- Live view: in-flight requests polled from /stats/active every second. -->
+    <div id="liveView" hidden>
+      <section class="live-bar">
+        <div class="live-count-wrap">
+          <span class="live-beacon" id="liveBeacon"></span>
+          <span class="live-count" id="liveCount">0</span>
+          <span class="live-count-label">active</span>
+        </div>
+        <div class="live-agg" id="liveAgg"></div>
+        <div class="spacer"></div>
+        <span class="status" id="liveStatus"></span>
+      </section>
+      <div class="live-grid" id="liveGrid">
+        <div class="live-empty" id="liveEmpty">No requests in flight — waiting for traffic…</div>
+      </div>
     </div>
 
     <!-- Routes view: the loaded config drawn as entrypoint -> model rule -> upstream. -->

@@ -48,6 +48,7 @@ type exchange struct {
 	body   []byte
 	trace  *trace.Entry
 	stat   *stats.Record
+	live   *liveRequest // in-flight entry for the live dashboard; nil-safe
 	start  time.Time
 }
 
@@ -63,6 +64,7 @@ type Server struct {
 	apiKey          string           // optional inbound client API key; empty = no client auth
 	search          *search.Handler  // nil when [search] is not configured
 	searchPathField string           // mount path for search endpoint; "" = not configured
+	live            *liveRegistry    // in-flight requests, for GET /stats/active
 }
 
 // New builds a Server. st may be nil (stats disabled); a nil logger falls back
@@ -99,6 +101,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		apiKey:          cfg.ClientAPIKey,
 		search:          newSearchHandler(cfg.Search, logger),
 		searchPathField: searchPathFromConfig(cfg.Search),
+		live:            newLiveRegistry(),
 	}
 }
 
@@ -184,6 +187,8 @@ func (s *Server) Handler() http.Handler {
 	// Config topology: read-only view of the loaded routes/upstreams. Unlike the
 	// stats API it works without storage, since it reads config, not the DB.
 	mux.HandleFunc("GET /stats/topology", s.handleTopology)
+	// Live in-flight requests: in-memory registry, also storage-independent.
+	mux.HandleFunc("GET /stats/active", s.handleStatsActive)
 	mux.Handle("GET /stats/", s.statsUIHandler())
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, _ *http.Request) {
 		// Relative redirect so it still lands on /stats/ when apid is mounted
@@ -281,6 +286,19 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		s.log.Info("trace request", "file", path)
 	}
 
+	live := s.live.begin(liveBegin{
+		clientModel:   sniff.Model,
+		upstreamModel: stat.UpstreamModel,
+		clientProto:   string(rt.InputProtocol),
+		upstreamProto: string(tg.cfg.Protocol),
+		upstream:      rule.Upstream,
+		path:          rt.Path,
+		ua:            r.UserAgent(),
+		stream:        sniff.Stream,
+		inputEstimate: len(bodyBytes) / 4, // ~4 bytes per token; replaced once usage arrives
+	})
+	defer live.end()
+
 	ex := &exchange{
 		target: tg,
 		model:  effModel,
@@ -289,6 +307,7 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		body:   bodyBytes,
 		trace:  traceEntry,
 		stat:   &stat,
+		live:   live,
 		start:  start,
 	}
 	// Same protocol on both ends => raw forward; otherwise convert.
@@ -489,6 +508,11 @@ func (s *Server) streamResponse(ex *exchange, body io.Reader, clientModel string
 	ex.w.WriteHeader(http.StatusOK)
 
 	sw := &sseWriter{w: ex.w, f: flusher}
+	// The convert package parses upstream chat SSE internally; tap the raw
+	// stream here so the live view still sees per-delta token growth.
+	if cb := ex.live.sseObserver(config.ProtoChat); cb != nil {
+		body = &lineObserverReader{r: body, cb: cb}
+	}
 	result, err := convert.StreamChatToResponses(ex.req.Context(), sw, body, clientModel, namespaces)
 	if err != nil {
 		s.log.Warn("stream conversion failed", "err", err)

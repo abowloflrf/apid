@@ -873,17 +873,201 @@ function scheduleTopoRedraw() {
   requestAnimationFrame(() => { redrawPending = false; drawTopoLinks(); });
 }
 
+// ---- live view (in-flight requests) ----
+// Polls GET /stats/active once a second while the view is open. The server
+// reports cumulative token counters per connection; instantaneous tokens/s is
+// the delta between consecutive snapshots, EMA-smoothed so it reads steady.
+// Cards are keyed by connection id and updated in place, so CSS transitions
+// (meter, tick flash) animate instead of re-rendering.
+
+const LIVE_POLL_MS = 1000;
+let liveTimer = null;
+let liveTick = 0; // guards overlapping fetches
+const liveRates = new Map(); // id -> { out, t, ema }
+
+const fmtTok = (v, est) => (est && v > 0 ? "~" : "") + fmtCompact(v);
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// One pill covering both ends: "responses" when equal, "responses→chat" when
+// the request is being converted.
+function liveProtoLabel(r) {
+  const a = protoShort(r.client_protocol), b = protoShort(r.upstream_protocol);
+  return a === b ? a : `${a}→${b}`;
+}
+
+function liveModelHtml(r) {
+  const client = r.client_model || "(no model)";
+  if (r.upstream_model && r.upstream_model !== r.client_model) {
+    return `${escapeHtml(client)} <span class="lc-arrow">→</span> <b>${escapeHtml(r.upstream_model)}</b>`;
+  }
+  return `<b>${escapeHtml(client)}</b>`;
+}
+
+// Phase drives the status dot and the rate area: sync requests just wait,
+// streams wait for the first token, then run.
+function livePhase(r) {
+  if (!r.stream) return "sync";
+  return r.ttft_ms == null ? "waiting" : "streaming";
+}
+
+function liveCardCreate(r) {
+  const el = document.createElement("article");
+  el.className = "live-card enter";
+  el.dataset.id = r.id;
+  el.innerHTML = `
+    <div class="lc-head">
+      <span class="lc-status"></span>
+      <span class="lc-model" title="${escapeAttr((r.client_model || "") + " → " + (r.upstream_model || ""))}">${liveModelHtml(r)}</span>
+      <span class="spacer"></span>
+      <span class="lc-elapsed tnum"></span>
+    </div>
+    <div class="lc-tags">
+      <span class="pill proto" title="${escapeAttr(r.client_protocol + " → " + r.upstream_protocol)}">${escapeHtml(liveProtoLabel(r))}</span>
+      <span class="mode ${r.mode}">${r.mode}</span>
+      ${r.stream ? `<span class="lc-sse">SSE</span>` : `<span class="lc-sync">sync</span>`}
+      <span class="lc-up" title="upstream">${escapeHtml(r.upstream || "")}</span>
+    </div>
+    <div class="lc-body">
+      <div class="lc-tok"><span class="lc-k">in</span><span class="lc-v lc-in tnum"></span></div>
+      <div class="lc-tok"><span class="lc-k">out</span><span class="lc-v lc-out tnum"></span></div>
+      <div class="lc-rate"><span class="lc-rate-v tnum"></span><span class="lc-rate-u"></span></div>
+    </div>
+    <div class="lc-meter"><div class="lc-meter-fill"></div></div>
+    <div class="lc-foot">
+      <span class="lc-path" title="${escapeAttr(r.path || "")}">${escapeHtml(r.path || "")}</span>
+      <span class="lc-ttft tnum"></span>
+      <span class="spacer"></span>
+      <span class="lc-ua" title="${escapeAttr(r.client_ua || "")}">${escapeHtml(r.client_ua || "")}</span>
+    </div>`;
+  // One-shot entrance; removing the class arms the transition end state.
+  requestAnimationFrame(() => el.classList.remove("enter"));
+  return el;
+}
+
+function liveCardUpdate(el, r, rate, now) {
+  const phase = livePhase(r);
+  el.dataset.phase = phase;
+  el.querySelector(".lc-elapsed").textContent = fmtElapsed(now - r.start);
+  el.querySelector(".lc-in").textContent = fmtTok(r.input_tokens, r.input_est);
+
+  const outEl = el.querySelector(".lc-out");
+  const outText = fmtTok(r.output_tokens, r.output_est);
+  if (outEl.textContent !== outText) {
+    outEl.textContent = outText;
+    outEl.classList.remove("tick");
+    void outEl.offsetWidth; // restart the flash animation
+    outEl.classList.add("tick");
+  }
+
+  const rateV = el.querySelector(".lc-rate-v");
+  const rateU = el.querySelector(".lc-rate-u");
+  if (phase === "streaming") {
+    rateV.textContent = rate >= 100 ? Math.round(rate) : rate.toFixed(1);
+    rateU.textContent = "tok/s";
+  } else {
+    rateV.textContent = phase === "waiting" ? "TTFT…" : "…";
+    rateU.textContent = "";
+  }
+  // sqrt scale keeps low rates visible while 200+ tok/s pins the bar.
+  const pct = phase === "streaming" ? Math.min(100, Math.sqrt(rate / 200) * 100) : 0;
+  el.querySelector(".lc-meter-fill").style.width = pct + "%";
+
+  el.querySelector(".lc-ttft").textContent = r.ttft_ms != null ? `TTFT ${fmtDur(r.ttft_ms)}` : "";
+}
+
+function renderLive(snap) {
+  const grid = document.getElementById("liveGrid");
+  const reqs = snap.requests || [];
+  document.getElementById("liveCount").textContent = reqs.length;
+  document.getElementById("liveBeacon").classList.toggle("on", reqs.length > 0);
+  document.getElementById("liveEmpty").hidden = reqs.length > 0;
+  updateLiveBadge(reqs.length);
+
+  const nowMs = performance.now();
+  const seen = new Set();
+  let sumRate = 0, streaming = 0;
+
+  for (const r of reqs) {
+    seen.add(String(r.id));
+    const prev = liveRates.get(r.id);
+    let ema = 0;
+    if (prev && nowMs > prev.t) {
+      const inst = Math.max(0, (r.output_tokens - prev.out) / ((nowMs - prev.t) / 1000));
+      ema = prev.ema > 0 ? prev.ema * 0.55 + inst * 0.45 : inst;
+    }
+    liveRates.set(r.id, { out: r.output_tokens, t: nowMs, ema });
+    if (livePhase(r) === "streaming") { sumRate += ema; streaming++; }
+
+    let card = grid.querySelector(`.live-card[data-id="${r.id}"]`);
+    if (!card) { card = liveCardCreate(r); grid.appendChild(card); }
+    liveCardUpdate(card, r, ema, snap.now);
+  }
+
+  // Drop finished connections (brief fade-out) and their rate state.
+  grid.querySelectorAll(".live-card").forEach((card) => {
+    if (seen.has(card.dataset.id) || card.classList.contains("leave")) return;
+    liveRates.delete(+card.dataset.id);
+    card.classList.add("leave");
+    setTimeout(() => card.remove(), 300);
+  });
+
+  document.getElementById("liveAgg").innerHTML = streaming
+    ? `<span class="la-v">${sumRate >= 100 ? Math.round(sumRate) : sumRate.toFixed(1)}</span> tok/s · ${streaming} streaming`
+    : "";
+}
+
+function updateLiveBadge(n) {
+  const b = document.getElementById("liveBadge");
+  b.textContent = n;
+  b.hidden = !n;
+}
+
+async function loadLive() {
+  const seq = ++liveTick;
+  try {
+    const r = await fetch(`${API}/active`);
+    if (!r.ok) throw new Error(String(r.status));
+    const snap = await r.json();
+    if (seq !== liveTick || state.view !== "live") return;
+    renderLive(snap);
+    document.getElementById("liveStatus").textContent =
+      `polling 1s · ${new Date().toLocaleTimeString("en-GB", { hour12: false })}`;
+  } catch (e) {
+    if (seq === liveTick) document.getElementById("liveStatus").textContent = "error: " + e.message;
+  }
+}
+
+function setLivePolling(on) {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  if (on) {
+    loadLive();
+    liveTimer = setInterval(loadLive, LIVE_POLL_MS);
+  } else {
+    // A frozen count would go stale the moment polling stops.
+    document.getElementById("liveBadge").hidden = true;
+  }
+}
+
 // ---- view switching ----
+const VIEWS = ["stats", "live", "routes"];
 function setView(view) {
   state.view = view;
   document.getElementById("statsView").hidden = view !== "stats";
+  document.getElementById("liveView").hidden = view !== "live";
   document.getElementById("routesView").hidden = view !== "routes";
   document.body.classList.toggle("view-routes", view === "routes");
+  document.body.classList.toggle("view-live", view === "live");
   document.getElementById("viewLabel").textContent = view;
   document.querySelectorAll("#viewTabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
-  if (location.hash.slice(1) !== view) history.replaceState(null, "", view === "stats" ? "#" : "#routes");
+  if (location.hash.slice(1) !== view) history.replaceState(null, "", view === "stats" ? "#" : "#" + view);
+  setLivePolling(view === "live");
   if (view === "routes") loadTopology();
 }
+const viewFromHash = () => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "stats");
 
 // ---- wiring ----
 function setRange(range) {
@@ -928,7 +1112,7 @@ function setupEvents() {
   document.querySelectorAll("#viewTabs button").forEach((b) => {
     b.onclick = () => setView(b.dataset.view);
   });
-  window.addEventListener("hashchange", () => setView(location.hash === "#routes" ? "routes" : "stats"));
+  window.addEventListener("hashchange", () => setView(viewFromHash()));
   // Curve endpoints are measured from laid-out DOM, so anything that reflows the
   // cards (window resize, wrapping text, fonts settling) has to redraw them.
   window.addEventListener("resize", scheduleTopoRedraw);
@@ -950,7 +1134,7 @@ async function init() {
   renderKPISkeletons();
   setRange("24h");
   setupEvents();
-  setView(location.hash === "#routes" ? "routes" : "stats");
+  setView(viewFromHash());
 
   await loadOptions();
   await loadAll();

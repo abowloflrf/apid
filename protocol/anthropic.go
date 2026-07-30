@@ -12,8 +12,9 @@ type AnthropicUsage struct {
 type AnthropicStreamEvent struct {
 	Type  string `json:"type"`
 	Delta struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type        string `json:"type"`
+		Text        string `json:"text"`
+		PartialJSON string `json:"partial_json"` // input_json_delta: streamed tool-use args
 	} `json:"delta"`
 	Message struct {
 		Usage *AnthropicUsage `json:"usage"`

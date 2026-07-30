@@ -30,7 +30,9 @@ var (
 	errClientAborted = errors.New("client aborted")
 )
 
-func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Protocol) (*stats.Usage, time.Time, error) {
+// observe, when non-nil, sees every forwarded line; the live registry uses it
+// to keep in-flight token counters current.
+func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Protocol, observe func([]byte)) (*stats.Usage, time.Time, error) {
 	reader := bufio.NewReader(src)
 	var usage *stats.Usage
 	var firstTokenAt time.Time
@@ -49,6 +51,9 @@ func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Pr
 			}
 			dst.Flush()
 			parseSSELine(line, proto, &usage, &firstTokenAt, &completed)
+			if observe != nil {
+				observe(line)
+			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {

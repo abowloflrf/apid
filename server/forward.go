@@ -119,7 +119,8 @@ func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
 	ex.w.Header().Set("Connection", "keep-alive")
 	ex.w.WriteHeader(resp.StatusCode)
 
-	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body, ex.target.cfg.Protocol)
+	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body,
+		ex.target.cfg.Protocol, ex.live.sseObserver(ex.target.cfg.Protocol))
 	if err != nil {
 		switch {
 		case errors.Is(err, errClientGone):

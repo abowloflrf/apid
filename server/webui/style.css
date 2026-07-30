@@ -385,6 +385,109 @@ body.loading .skel-fill { display: block; }
   body.intro .table-card { animation-delay: .16s; }
 }
 
+/* ---- Live view (in-flight requests) ----
+   A beacon + big count headline, then one card per open connection. The card
+   updates in place every second: the out-counter flashes as tokens land, and a
+   thin meter under the numbers breathes with the instantaneous tokens/s. Same
+   quiet furniture as everywhere else — motion is reserved for the data. */
+
+/* Time filters mean nothing for a momentary snapshot. */
+body.view-live .filters { display: none; }
+
+.tab-badge {
+  display: inline-block; min-width: 15px; margin-left: 6px; padding: 0 4px;
+  background: var(--green); color: #fff; border-radius: 9px;
+  font-size: 9.5px; font-weight: 700; text-align: center; line-height: 15px;
+  font-variant-numeric: tabular-nums; vertical-align: 1px;
+}
+
+.live-bar { display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap; margin-bottom: 20px; }
+.live-count-wrap { display: flex; align-items: center; gap: 12px; }
+.live-count { font-family: var(--mono); font-size: 38px; font-weight: 600; letter-spacing: -1.5px; color: var(--text-strong); line-height: 1; }
+.live-count-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700; }
+.live-agg { font-size: 12.5px; color: var(--muted); font-family: var(--mono); }
+.live-agg .la-v { font-weight: 700; color: var(--text-strong); font-size: 15px; }
+
+/* Idle: a hollow gray ring. Active: sage, with a soft radar ping. */
+.live-beacon { position: relative; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted-2); flex: none; }
+.live-beacon.on { background: var(--green); border-color: var(--green); }
+.live-beacon.on::after {
+  content: ""; position: absolute; inset: -2px; border-radius: 50%;
+  border: 2px solid var(--green); animation: ping 1.6s ease-out infinite;
+}
+@keyframes ping { from { transform: scale(1); opacity: .7; } to { transform: scale(2.4); opacity: 0; } }
+
+.live-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+.live-empty {
+  grid-column: 1 / -1; text-align: center; color: var(--muted-2); font-size: 13px;
+  padding: 56px 20px; border: 1px dashed var(--border-strong); border-radius: var(--radius);
+}
+
+.live-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px 12px; min-width: 0;
+  transition: opacity .3s, transform .3s, border-color .18s;
+}
+.live-card:hover { border-color: var(--border-strong); }
+.live-card.enter { opacity: 0; transform: translateY(6px); }
+.live-card.leave { opacity: 0; transform: scale(.98); }
+
+.lc-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.lc-model {
+  font-family: var(--mono); font-size: 13px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.lc-model b { color: var(--text-strong); font-weight: 600; }
+.lc-arrow { color: var(--muted-2); }
+.lc-elapsed { font-family: var(--mono); font-size: 12px; color: var(--muted); flex: none; }
+
+/* Status dot by phase: streaming pulses sage, waiting breathes ochre, sync idles slate. */
+.lc-status { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--muted-2); }
+.live-card[data-phase="streaming"] .lc-status { background: var(--green); animation: pulse 1.2s ease-in-out infinite; }
+.live-card[data-phase="waiting"] .lc-status { background: var(--amber); animation: pulse 1.8s ease-in-out infinite; }
+.live-card[data-phase="sync"] .lc-status { background: var(--accent); animation: pulse 2.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.lc-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.lc-sse, .lc-sync {
+  font-size: 9px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  border-radius: 5px; padding: 1px 6px;
+}
+.lc-sse { background: rgba(95, 148, 153, .16); color: #43767b; }
+.lc-sync { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.lc-up { font-family: var(--mono); font-size: 11px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.lc-body { display: flex; align-items: flex-end; gap: 22px; margin-top: 13px; }
+.lc-tok { display: flex; flex-direction: column; gap: 1px; }
+.lc-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: .8px; font-weight: 700; color: var(--muted-2); }
+.lc-v { font-family: var(--mono); font-size: 19px; font-weight: 600; color: var(--text-strong); line-height: 1.15; }
+/* Each counter change lands with a brief sage flash — the "tokens are flowing"
+   signal, retriggered from JS by re-adding the class. */
+.lc-out.tick { animation: tokTick .5s ease-out; }
+@keyframes tokTick { from { color: var(--green); } }
+
+.lc-rate { margin-left: auto; display: flex; align-items: baseline; gap: 5px; }
+.lc-rate-v { font-family: var(--mono); font-size: 23px; font-weight: 700; letter-spacing: -.5px; color: var(--green); line-height: 1; }
+.live-card[data-phase="waiting"] .lc-rate-v { color: var(--amber); font-size: 14px; font-weight: 600; }
+.live-card[data-phase="sync"] .lc-rate-v { color: var(--muted-2); font-size: 14px; }
+.lc-rate-u { font-size: 10.5px; color: var(--muted); font-weight: 600; }
+
+.lc-meter { height: 3px; background: var(--panel-2); border-radius: 2px; margin-top: 10px; overflow: hidden; }
+.lc-meter-fill {
+  height: 100%; width: 0; border-radius: 2px;
+  background: linear-gradient(90deg, var(--teal), var(--green));
+  transition: width .9s linear; /* ~poll interval, so the bar glides between samples */
+}
+
+.lc-foot {
+  display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--border); font-size: 10.5px; color: var(--muted-2); font-family: var(--mono);
+  min-width: 0;
+}
+.lc-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-ttft { flex: none; color: var(--muted); }
+.lc-ua { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---- Routes view (config topology) ----
    Two columns of cards — entrypoints on the left, upstreams on the right — with
    an SVG layer drawing one curve per model rule across the gutter between them.

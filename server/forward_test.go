@@ -631,7 +631,7 @@ func (e *errReader) Read(p []byte) (int, error) {
 
 // TestForwardSSEWriteError: a failing client write stops forwarding and returns error.
 func TestForwardSSEWriteError(t *testing.T) {
-	_, _, err := forwardSSE(context.Background(), failSink{}, strings.NewReader("data: {}\n\n"), config.ProtoChat)
+	_, _, err := forwardSSE(context.Background(), failSink{}, strings.NewReader("data: {}\n\n"), config.ProtoChat, nil)
 	if err == nil {
 		t.Fatal("expected write error, got nil")
 	}
@@ -639,7 +639,7 @@ func TestForwardSSEWriteError(t *testing.T) {
 
 // TestForwardSSEReadError: a non-EOF upstream read error is returned (not swallowed).
 func TestForwardSSEReadError(t *testing.T) {
-	_, _, err := forwardSSE(context.Background(), okSink{}, &errReader{}, config.ProtoChat)
+	_, _, err := forwardSSE(context.Background(), okSink{}, &errReader{}, config.ProtoChat, nil)
 	if err == nil {
 		t.Fatal("expected read error, got nil")
 	}
@@ -647,7 +647,7 @@ func TestForwardSSEReadError(t *testing.T) {
 
 // TestForwardSSECleanEOF: a normal stream ending in EOF returns no error.
 func TestForwardSSECleanEOF(t *testing.T) {
-	_, _, err := forwardSSE(context.Background(), okSink{}, strings.NewReader("data: {}\n\ndata: [DONE]\n\n"), config.ProtoChat)
+	_, _, err := forwardSSE(context.Background(), okSink{}, strings.NewReader("data: {}\n\ndata: [DONE]\n\n"), config.ProtoChat, nil)
 	if err != nil {
 		t.Fatalf("clean EOF should not error, got %v", err)
 	}

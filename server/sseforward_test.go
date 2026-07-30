@@ -194,7 +194,7 @@ func TestForwardSSE_CompletedClientGone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	src := &blockingReader{data: []byte(completedResponsesChunk)}
 	src.onDrained = func() { cancel() }
-	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses)
+	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses, nil)
 	if !errors.Is(err, errClientGone) {
 		t.Errorf("want errClientGone, got %v", err)
 	}
@@ -205,7 +205,7 @@ func TestForwardSSE_AbortedClientGone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	src := &blockingReader{data: []byte(deltaResponsesChunk)}
 	src.onDrained = func() { cancel() }
-	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses)
+	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses, nil)
 	if !errors.Is(err, errClientAborted) {
 		t.Errorf("want errClientAborted, got %v", err)
 	}
@@ -220,7 +220,7 @@ func TestForwardSSE_ClientGoneDuringBlockedRead(t *testing.T) {
 		time.Sleep(10 * time.Millisecond) // let forwardSSE parse and enter the blocked Read
 		cancel()
 	}()
-	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses)
+	_, _, err := forwardSSE(ctx, okSink{}, src, config.ProtoResponses, nil)
 	if !errors.Is(err, errClientGone) {
 		t.Errorf("want errClientGone, got %v", err)
 	}
@@ -229,7 +229,7 @@ func TestForwardSSE_ClientGoneDuringBlockedRead(t *testing.T) {
 func TestForwardSSE_WriteFailureClassified(t *testing.T) {
 	// Write fails before the line is parsed, so completed is still false ->
 	// errClientAborted (not a benign drain).
-	_, _, err := forwardSSE(context.Background(), failSink{}, strings.NewReader(deltaResponsesChunk), config.ProtoResponses)
+	_, _, err := forwardSSE(context.Background(), failSink{}, strings.NewReader(deltaResponsesChunk), config.ProtoResponses, nil)
 	if !errors.Is(err, errClientAborted) {
 		t.Errorf("want errClientAborted, got %v", err)
 	}
@@ -239,7 +239,7 @@ func TestForwardSSE_UpstreamReadErrorNotClientGone(t *testing.T) {
 	// A non-EOF, non-cancel read error must surface as "read upstream", not as a
 	// client-gone sentinel. errReader (from forward_test.go) yields one chunk
 	// then a "conn reset" error.
-	_, _, err := forwardSSE(context.Background(), okSink{}, &errReader{}, config.ProtoChat)
+	_, _, err := forwardSSE(context.Background(), okSink{}, &errReader{}, config.ProtoChat, nil)
 	if err == nil {
 		t.Fatal("want error, got nil")
 	}
