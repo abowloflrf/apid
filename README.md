@@ -31,6 +31,7 @@ To protect the gateway itself, set a top-level `client_api_key` in
 `config.toml`. When set, clients must send it as `Authorization: Bearer ...`,
 `X-Api-Key`, or `Api-Key`. This inbound key is stripped before forwarding; the
 upstream credential remains `[[upstream]].api_key` (Anthropic uses `X-Api-Key`).
+Only forwarding routes require it; `/healthz` and `/stats/*` stay open.
 
 ## Docker
 
@@ -51,10 +52,31 @@ curl http://localhost:19092/v1/responses \
 Add `"stream": true` for SSE streaming. `input` accepts strings or message arrays;
 `tools` supports function calling.
 
+## Web Search
+
+Optional. When `[search]` is configured (Exa backend), apid serves
+`POST /v1/alpha/search` — the endpoint Codex calls when a custom provider opts
+into `supports_standalone_web_search`, letting Codex's built-in `web.run` tool
+work with non-OpenAI backends.
+
+```toml
+[search]
+provider = "exa"
+api_key  = "your-exa-api-key"
+```
+
+Codex side:
+
+```toml
+[model_providers.apid]
+supports_standalone_web_search = true
+```
+
 ## Stats
 
 Set `APID_DB` to a SQLite path to enable async per-request metrics (protocol /
-model / token / duration / TTFT). Off by default; zero overhead.
+model / upstream URL / token / cached tokens / duration / TTFT). Off by default;
+zero overhead.
 
 ```bash
 APID_DB=apid.db go run .
