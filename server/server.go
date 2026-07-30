@@ -18,6 +18,7 @@ import (
 	"github.com/abowloflrf/apid/convert"
 	"github.com/abowloflrf/apid/protocol"
 	"github.com/abowloflrf/apid/reasoning"
+	"github.com/abowloflrf/apid/search"
 	"github.com/abowloflrf/apid/stats"
 	"github.com/abowloflrf/apid/store"
 	"github.com/abowloflrf/apid/trace"
@@ -51,14 +52,16 @@ type exchange struct {
 }
 
 type Server struct {
-	routes    map[string]config.Route
-	upstreams map[string]*target
-	log       *slog.Logger
-	tracer    *trace.Tracer
-	recorder  *stats.Recorder
-	db        *sql.DB          // read-only handle for the stats query API; nil when storage is off
-	reasoning *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
-	apiKey    string           // optional inbound client API key; empty = no client auth
+	routes          map[string]config.Route
+	upstreams       map[string]*target
+	log             *slog.Logger
+	tracer          *trace.Tracer
+	recorder        *stats.Recorder
+	db              *sql.DB          // read-only handle for the stats query API; nil when storage is off
+	reasoning       *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
+	apiKey          string           // optional inbound client API key; empty = no client auth
+	search          *search.Handler  // nil when [search] is not configured
+	searchPathField string           // mount path for search endpoint; "" = not configured
 }
 
 // New builds a Server. st may be nil (stats disabled); a nil logger falls back
@@ -84,15 +87,36 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		db = st.DB()
 	}
 	return &Server{
-		routes:    routes,
-		upstreams: upstreams,
-		log:       logger,
-		tracer:    trace.New(cfg.TraceDir, logger),
-		recorder:  stats.NewRecorder(st, 0, logger),
-		db:        db,
-		reasoning: reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
-		apiKey:    cfg.ClientAPIKey,
+		routes:          routes,
+		upstreams:       upstreams,
+		log:             logger,
+		tracer:          trace.New(cfg.TraceDir, logger),
+		recorder:        stats.NewRecorder(st, 0, logger),
+		db:              db,
+		reasoning:       reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
+		apiKey:          cfg.ClientAPIKey,
+		search:          newSearchHandler(cfg.Search, logger),
+		searchPathField: searchPathFromConfig(cfg.Search),
 	}
+}
+
+// newSearchHandler builds a search.Handler when [search] is configured,
+// or returns nil when search is disabled.
+func newSearchHandler(sc config.SearchConfig, log *slog.Logger) *search.Handler {
+	if sc.Provider == "" {
+		return nil
+	}
+	log.Info("search enabled", "provider", sc.Provider, "path", searchPathFromConfig(sc))
+	return search.New(sc.APIKey, sc.BaseURL, log)
+}
+
+// searchPathFromConfig returns the configured search endpoint path, defaulting
+// to /v1/alpha/search when [search].path is empty.
+func searchPathFromConfig(sc config.SearchConfig) string {
+	if sc.Path != "" {
+		return sc.Path
+	}
+	return "/v1/alpha/search"
 }
 
 func upstreamOptions(proto config.Protocol) []upstream.Option {
@@ -124,6 +148,12 @@ func (s *Server) Close() {
 	s.recorder.Close()
 }
 
+// searchPath returns the path the search endpoint is mounted on. It defaults
+// to /v1/alpha/search but can be overridden via [search].path in config.
+func (s *Server) searchPath() string {
+	return s.searchPathField
+}
+
 // Handler 返回配置好路由的 http.Handler。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -131,6 +161,10 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST "+rt.Path, func(w http.ResponseWriter, r *http.Request) {
 			s.handleRoute(rt, w, r)
 		})
+	}
+	if s.search != nil {
+		path := s.searchPath()
+		mux.HandleFunc("POST "+path, s.search.ServeHTTP)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

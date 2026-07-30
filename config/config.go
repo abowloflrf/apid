@@ -25,10 +25,11 @@ const (
 )
 
 type Config struct {
-	Listen       string // APID_LISTEN
-	TraceDir     string // APID_TRACE_DIR / APID_TRACE; empty = off
-	DB           string // APID_DB; empty = off
-	ClientAPIKey string // client_api_key in TOML; empty = no inbound client auth
+	Listen       string       // APID_LISTEN
+	TraceDir     string       // APID_TRACE_DIR / APID_TRACE; empty = off
+	DB           string       // APID_DB; empty = off
+	ClientAPIKey string       // client_api_key in TOML; empty = no inbound client auth
+	Search       SearchConfig // optional; zero value = search endpoint disabled
 	Upstreams    []Upstream
 	Routes       []Route
 }
@@ -63,6 +64,16 @@ type Route struct {
 	Path          string      `toml:"path"`
 	InputProtocol Protocol    `toml:"input_protocol"`
 	Models        []ModelRule `toml:"model"`
+}
+
+// SearchConfig configures the optional standalone web-search endpoint
+// (POST /v1/alpha/search) that Codex invokes when the model provider opts into
+// supports_standalone_web_search. Currently only Exa is supported as a backend.
+type SearchConfig struct {
+	Provider string `toml:"provider"` // "exa"; empty = search endpoint disabled
+	APIKey   string `toml:"api_key"`  // Exa API key
+	BaseURL  string `toml:"base_url"` // optional; defaults to "https://api.exa.ai"
+	Path     string `toml:"path"`     // optional; defaults to "/v1/alpha/search"
 }
 
 // Resolve picks the matching model rule for a model: exact > glob > catch-all.
@@ -118,9 +129,10 @@ func globMatch(pattern, s string) bool {
 }
 
 type fileConfig struct {
-	ClientAPIKey string     `toml:"client_api_key"`
-	Upstreams    []Upstream `toml:"upstream"`
-	Routes       []Route    `toml:"route"`
+	ClientAPIKey string       `toml:"client_api_key"`
+	Search       SearchConfig `toml:"search"`
+	Upstreams    []Upstream   `toml:"upstream"`
+	Routes       []Route      `toml:"route"`
 }
 
 // Load reads ops params from env and upstreams/routes from the TOML file at
@@ -148,6 +160,7 @@ func Load(configPath string) (Config, error) {
 		TraceDir:     traceDir,
 		DB:           env("APID_DB", ""),
 		ClientAPIKey: fc.ClientAPIKey,
+		Search:       fc.Search,
 		Upstreams:    fc.Upstreams,
 		Routes:       fc.Routes,
 	}, nil
@@ -173,6 +186,9 @@ func loadFullFile(path string) (fileConfig, error) {
 	}
 	if undec := md.Undecoded(); len(undec) > 0 {
 		return fileConfig{}, fmt.Errorf("config: %q has unknown keys: %v", path, undec)
+	}
+	if err := validateSearchConfig(fc.Search); err != nil {
+		return fileConfig{}, err
 	}
 	if err := validateConfig(fc.Upstreams, fc.Routes); err != nil {
 		return fileConfig{}, err
@@ -257,6 +273,24 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		if catchall > 1 {
 			return fmt.Errorf("config: route %q has multiple catch-all matches", r.Path)
 		}
+	}
+	return nil
+}
+
+func validateSearchConfig(s SearchConfig) error {
+	if s.Provider == "" {
+		return nil // search is optional
+	}
+	switch s.Provider {
+	case "exa":
+		if s.APIKey == "" {
+			return fmt.Errorf("config: [search] api_key must not be empty when provider is %q", s.Provider)
+		}
+	default:
+		return fmt.Errorf("config: [search] provider %q not supported (only \"exa\")", s.Provider)
+	}
+	if s.Path != "" && !strings.HasPrefix(s.Path, "/") {
+		return fmt.Errorf("config: [search] path %q must start with /", s.Path)
 	}
 	return nil
 }

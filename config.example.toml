@@ -77,3 +77,18 @@ input_protocol = "anthropic_messages"
   [[route.model]]
   match = "claude-*"
   upstream = "anthropic"   # equal protocols => pure forward
+
+# ── Standalone web search (optional) ──────────────────────────────────────────
+# When [search] is configured, apid serves POST /v1/alpha/search, the endpoint
+# Codex calls when a custom provider opts into supports_standalone_web_search.
+# This lets Codex's built-in web.run tool work with non-OpenAI backends.
+#
+# Enable on the Codex side by adding to ~/.codex/config.toml:
+#   [model_providers.apid]
+#   supports_standalone_web_search = true
+#
+# [search]
+# provider = "exa"                          # only "exa" supported
+# api_key = "your-exa-api-key"              # Exa API key (https://exa.ai)
+# # base_url = "https://api.exa.ai"         # optional; defaults to this
+# # path = "/v1/alpha/search"              # optional; defaults to this
