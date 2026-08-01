@@ -479,7 +479,7 @@ func (h *Handler) exaSearch(ctx context.Context, q SearchQuery, settings *Search
 		Type:           "auto",
 		IncludeDomains: includeDomains,
 		ExcludeDomains: excludeDomains,
-		Contents: &exaContents{Text: exaText{MaxCharacters: maxChars}},
+		Contents:       &exaContents{Text: exaText{MaxCharacters: maxChars}},
 	}
 	if q.Recency != nil && *q.Recency > 0 {
 		esr.StartPublishedDate = time.Now().AddDate(0, 0, -*q.Recency).Format("2006-01-02")

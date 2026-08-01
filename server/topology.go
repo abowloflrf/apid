@@ -54,8 +54,8 @@ type routeInfo struct {
 // ruleInfo is one [[route.model]] entry with everything the request path would
 // derive from it at dispatch time.
 type ruleInfo struct {
-	Match          string `json:"match"`           // as written; "" for the implicit catch-all
-	MatchKind      string `json:"match_kind"`      // exact | glob | catchall
+	Match          string `json:"match"`      // as written; "" for the implicit catch-all
+	MatchKind      string `json:"match_kind"` // exact | glob | catchall
 	Upstream       string `json:"upstream"`
 	UpstreamProto  string `json:"upstream_protocol"`
 	Mode           string `json:"mode"`            // forward | convert
