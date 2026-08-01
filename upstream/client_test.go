@@ -178,3 +178,53 @@ func TestChatCompletions(t *testing.T) {
 		t.Errorf("upstream body = %+v, want model=deepseek-chat with 1 message", sent)
 	}
 }
+
+// TestForwardResponsesEndpoint: WithResponsesPath 给同一客户端加第二个 Responses
+// 端点，ForwardResponsesWithQuery 打到该端点且鉴权语义与主端点一致。
+func TestForwardResponsesEndpoint(t *testing.T) {
+	var gotPath, gotQuery, gotAuth string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "/v1/chat/completions", "secret-key", WithResponsesPath("/v1/responses"))
+	if !c.SupportsResponses() {
+		t.Fatal("SupportsResponses() = false, want true")
+	}
+	if got := c.ResponsesEndpoint(); got != srv.URL+"/v1/responses" {
+		t.Errorf("ResponsesEndpoint() = %q", got)
+	}
+
+	in := http.Header{}
+	in.Set("Authorization", "Bearer client-tok")
+	resp, err := c.ForwardResponsesWithQuery(context.Background(), []byte(`{"model":"gpt-x"}`), in, "beta=true")
+	if err != nil {
+		t.Fatalf("ForwardResponsesWithQuery: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotPath != "/v1/responses" {
+		t.Errorf("path = %q, want /v1/responses", gotPath)
+	}
+	if gotQuery != "beta=true" {
+		t.Errorf("query = %q, want beta=true", gotQuery)
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("Authorization = %q, want configured apiKey", gotAuth)
+	}
+	if string(gotBody) != `{"model":"gpt-x"}` {
+		t.Errorf("body = %q, want verbatim", gotBody)
+	}
+
+	// 未配置 Responses 端点时调用应报错，而不是打到主端点。
+	plain := New(srv.URL, "/v1/chat/completions", "")
+	if _, err := plain.ForwardResponsesWithQuery(context.Background(), []byte(`{}`), http.Header{}, ""); err == nil {
+		t.Fatal("ForwardResponsesWithQuery on a client without responses endpoint should error")
+	}
+}

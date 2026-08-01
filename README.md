@@ -7,6 +7,7 @@ Chat / Responses / Anthropic Messages.
 ```
 Client ⇄ Responses ⇄ apid ⇄ Chat Completions ⇄ Upstream    (conversion)
 Client ⇄ Chat/Resp ⇄ apid ⇄ Chat/Resp ⇄ Upstream           (forward)
+Client ⇄ Responses ⇄ apid ⇄ Responses ⇄ Upstream           (dual protocol, supports_responses)
 Client ⇄ Messages ⇄ apid ⇄ Messages ⇄ Anthropic            (forward)
 ```
 
@@ -26,6 +27,12 @@ go run . --config config.toml        # listens on :19092 by default (override wi
 Config uses `[[upstream]]` (backends, referenced by `name`) and `[[route]]`
 (public paths + `model` dispatch rules). Env vars live in `.env` (see
 `.env.example`); full syntax in `config.example.toml`.
+
+Providers that natively speak both OpenAI protocols only need one upstream:
+set `supports_responses = true` on an `openai_chat_completions` upstream (and
+optionally `responses_path`). A `openai_responses` route hitting it then
+forward raw bytes to the Responses endpoint instead of converting to Chat
+Completions.
 
 To protect the gateway itself, set a top-level `client_api_key` in
 `config.toml`. When set, clients must send it as `Authorization: Bearer ...`,

@@ -292,6 +292,7 @@ main { padding: 24px 26px 64px; max-width: 1600px; margin: 0 auto; }
 .pill.ok { background: rgba(111, 149, 118, .14); color: #4d7758; }
 .pill.err { background: rgba(192, 123, 115, .16); color: var(--red-ink); }
 .pill.proto { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); font-weight: 600; }
+.pill.dual { background: rgba(93, 138, 178, .14); color: #6d9bc4; border: 1px solid var(--border); font-weight: 600; }
 .heat { display: inline-block; padding: 1px 8px; border-radius: 6px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
 .err-text { color: var(--red-ink); max-width: 360px; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
@@ -543,6 +544,7 @@ body.view-routes .filters { display: none; }
   font-family: var(--mono); font-size: 11.5px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px;
 }
+.tc-endpoint.alt { color: #6d9bc4; }
 .tc-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
 .tc-meta .k { color: var(--muted-2); }
 .tc-meta code { font-family: var(--mono); color: var(--text); }

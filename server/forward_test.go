@@ -680,3 +680,120 @@ func TestForwardErrorContentType(t *testing.T) {
 		t.Errorf("body = %q, want verbatim", rec.Body.String())
 	}
 }
+
+// dualProtocolConfig 是「一个供应商同时支持 chat 与 responses」的最小配置：
+// upstream 主协议仍是 chat，supports_responses 打开第二个端点。
+func dualProtocolConfig(upstreamURL string) config.Config {
+	return config.Config{
+		Upstreams: []config.Upstream{{
+			Name:              "up",
+			Protocol:          config.ProtoChat,
+			BaseURL:           upstreamURL,
+			Path:              "/v1/chat/completions",
+			SupportsResponses: true,
+		}},
+		Routes: []config.Route{{
+			Path:          "/v1/responses",
+			InputProtocol: config.ProtoResponses,
+			Models:        []config.ModelRule{{Match: "*", Upstream: "up"}},
+		}},
+	}
+}
+
+// TestForwardResponsesPassthroughDualProtocol: responses 入口命中 supports_responses
+// 的 chat upstream 时直接透传到 /v1/responses，不做 responses -> chat 转换。
+func TestForwardResponsesPassthroughDualProtocol(t *testing.T) {
+	const upstreamBody = `{"id":"resp_x","object":"response","status":"completed","model":"gpt-x","usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}`
+	var gotPath, gotQuery, gotBody string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		b, _ := readAll(r)
+		gotBody = b
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(upstreamBody))
+	}))
+	defer up.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "dual.db")
+	st, _ := store.Open(dbPath)
+	defer st.Close()
+	srv := New(dualProtocolConfig(up.URL), st, nil)
+
+	reqBody := `{"model":"gpt-x","input":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses?beta=true", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != upstreamBody {
+		t.Errorf("响应未原样透传:\n got=%s\nwant=%s", rec.Body.String(), upstreamBody)
+	}
+	if gotPath != "/v1/responses" {
+		t.Errorf("上游 path = %q, want /v1/responses", gotPath)
+	}
+	if gotQuery != "beta=true" {
+		t.Errorf("上游 query = %q, want beta=true", gotQuery)
+	}
+	if gotBody != reqBody {
+		t.Errorf("请求未原样转发（不应转换成 chat）:\n got=%s\nwant=%s", gotBody, reqBody)
+	}
+
+	var cProto, upProto, upURL string
+	if err := st.DB().QueryRow(`SELECT client_protocol, upstream_protocol, upstream_url FROM requests LIMIT 1`).
+		Scan(&cProto, &upProto, &upURL); err != nil {
+		t.Fatal(err)
+	}
+	if cProto != "openai_responses" || upProto != "openai_responses" {
+		t.Errorf("协议错: client=%q upstream=%q, want responses/responses", cProto, upProto)
+	}
+	if want := up.URL + "/v1/responses?beta=true"; upURL != want {
+		t.Errorf("upstream_url = %q, want %q", upURL, want)
+	}
+}
+
+// TestForwardResponsesPassthroughStream: 双协议透传的流式路径按 Responses 协议
+// 解析 usage/TTFT，字节仍原样回传。
+func TestForwardResponsesPassthroughStream(t *testing.T) {
+	const upstreamBody = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n" +
+		"data: [DONE]\n\n"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fl := w.(http.Flusher)
+		_, _ = w.Write([]byte(upstreamBody))
+		fl.Flush()
+	}))
+	defer up.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "dual-stream.db")
+	st, _ := store.Open(dbPath)
+	defer st.Close()
+	srv := New(dualProtocolConfig(up.URL), st, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"gpt-x","input":"hi","stream":true}`))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	srv.Close()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != upstreamBody {
+		t.Errorf("流式响应未原样透传:\n got=%s\nwant=%s", rec.Body.String(), upstreamBody)
+	}
+
+	var upProto string
+	var inTok, outTok, stream int
+	if err := st.DB().QueryRow(`SELECT upstream_protocol, input_tokens, output_tokens, stream FROM requests LIMIT 1`).
+		Scan(&upProto, &inTok, &outTok, &stream); err != nil {
+		t.Fatal(err)
+	}
+	if upProto != "openai_responses" || inTok != 4 || outTok != 2 || stream != 1 {
+		t.Errorf("stats 错: upstream_protocol=%q in=%d out=%d stream=%d, want responses/4/2/1", upProto, inTok, outTok, stream)
+	}
+}

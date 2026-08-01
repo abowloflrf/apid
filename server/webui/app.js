@@ -720,7 +720,9 @@ function ruleRow(r, key) {
   }
   const modeTitle = r.mode === "convert"
     ? `converted: ${r.upstream_protocol} spoken upstream`
-    : "same protocol on both ends — bytes forwarded as-is";
+    : r.via_responses
+      ? "supports_responses: responses forwarded natively, no conversion"
+      : "same protocol on both ends — bytes forwarded as-is";
   return `<li class="rule" data-key="${escapeAttr(key)}" data-up="${escapeAttr(r.upstream)}">
     <span class="match ${r.match_kind === "catchall" ? "catchall" : ""}">${escapeHtml(r.match || "*")}</span>
     <span class="kind">${r.match_kind}</span>
@@ -757,13 +759,21 @@ function upstreamCard(u) {
     `<span><span class="k">auth</span> <code title="${escapeAttr(u.auth_header || "")}">${escapeHtml(auth)}</code></span>`,
     `<span><span class="k">rules</span> <code>${u.ref_count}</code></span>`,
   ].join("");
+  const dualPill = u.supports_responses
+    ? `<span class="pill dual" title="same upstream also speaks openai_responses (supports_responses = true)">+responses</span>`
+    : "";
+  const responsesEndpoint = u.supports_responses
+    ? `<div class="tc-endpoint alt" title="OpenAI Responses endpoint; openai_responses rules forward here">responses: ${escapeHtml(u.responses_endpoint || "")}</div>`
+    : "";
   return `<article class="topo-card upstream" data-up="${escapeAttr(u.name)}">
     <div class="tc-head">
       <span class="dot" style="background:${upColorFor(u.name)}"></span>
       <span class="name">${escapeHtml(u.name)}</span>
       <span class="pill proto" title="${escapeAttr(u.protocol)}">${protoShort(u.protocol)}</span>
+      ${dualPill}
     </div>
     <div class="tc-endpoint" title="${escapeAttr(u.endpoint || "")}">${escapeHtml(u.endpoint || "")}</div>
+    ${responsesEndpoint}
     <div class="tc-meta">${meta}</div>
   </article>`;
 }
@@ -772,9 +782,11 @@ function renderTopology(t) {
   renderTopoMeta(t);
   document.getElementById("topoRoutes").innerHTML = (t.routes || []).map(routeCard).join("");
   document.getElementById("topoUpstreams").innerHTML = (t.upstreams || []).map(upstreamCard).join("");
+  const anyDual = (t.upstreams || []).some((u) => u.supports_responses);
   document.getElementById("topoLegend").innerHTML = `
     <span class="lg"><span class="swatch-line"></span> forward — same protocol, raw bytes</span>
     <span class="lg"><span class="swatch-line dashed"></span> convert — responses → chat</span>
+    ${anyDual ? `<span class="lg"><span class="swatch-line"></span> forward — responses passthrough (supports_responses)</span>` : ""}
     <span class="lg">match order: exact › glob › catch-all</span>`;
   wireTopoHover();
   drawTopoLinks();

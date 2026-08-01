@@ -64,7 +64,15 @@ func (s *Server) forwardRaw(ex *exchange) {
 		}
 	}
 
-	resp, err := ex.target.client.ForwardWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
+	var (
+		resp *http.Response
+		err  error
+	)
+	if ex.viaResponses {
+		resp, err = ex.target.client.ForwardResponsesWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
+	} else {
+		resp, err = ex.target.client.ForwardWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
+	}
 	if err != nil {
 		ex.stat.Error = "upstream: " + err.Error()
 		writeError(ex.w, http.StatusBadGateway, err.Error())
@@ -99,7 +107,7 @@ func forwardJSON(ex *exchange, resp *http.Response) {
 		writeError(ex.w, http.StatusBadGateway, "failed to read upstream response: "+err.Error())
 		return
 	}
-	ex.stat.Usage = extractUsage(ex.target.cfg.Protocol, body)
+	ex.stat.Usage = extractUsage(ex.proto, body)
 
 	copyContentType(ex.w, resp)
 	ex.w.WriteHeader(resp.StatusCode)
@@ -120,7 +128,7 @@ func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
 	ex.w.WriteHeader(resp.StatusCode)
 
 	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body,
-		ex.target.cfg.Protocol, ex.live.sseObserver(ex.target.cfg.Protocol))
+		ex.proto, ex.live.sseObserver(ex.proto))
 	if err != nil {
 		switch {
 		case errors.Is(err, errClientGone):

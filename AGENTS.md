@@ -14,6 +14,11 @@
 - **纯转发**(两端协议相同,chat→chat / responses→responses / anthropic→anthropic 均可):
   原样转发字节,仅 sniff/解析采集 model/stream/token/TTFT 指标(upstream 配了 `model`
   才改写 body)。
+- **双协议透传**:`openai_chat_completions` upstream 配 `supports_responses = true`
+  (可选 `responses_path`,留空由 `path` 推导:去掉尾部 `/chat/completions` 换成
+  `/responses`)时,同一后端还原生支持 Responses;responses 入口命中它按
+  `responses → responses` 纯转发到 responses 端点,不做转换。供应商两种协议都支持时
+  不用写两份 upstream。
 
 枚举协议:`openai_responses`、`openai_chat_completions`、`anthropic_messages`。
 
@@ -34,6 +39,9 @@ go run .                                          # 启动服务
 的 struct 注释,这里只记约定:
 
 - `[[upstream]].model`:非空覆盖转发 model(纯转发也生效),留空透传。
+- `[[upstream]].supports_responses`:布尔开关,仅对 `openai_chat_completions` 生效;
+  打开后同一后端同时接受 Chat 与 Responses,responses 入口直接透传。`responses_path`
+  显式指定 Responses 端点,留空则从 `path` 推导;单独出现或用于非 chat 协议会报错。
 - `protocol = "anthropic_messages"` 当前只支持同协议纯转发;配置的 `api_key` 会作为
   `X-Api-Key` 发给上游。
 - `[[route.model]]`:至少一条 `{match, upstream, model}` 规则。`match` 精确名 / glob
@@ -53,7 +61,7 @@ go run .                                          # 启动服务
 - **`trace`** — 可选 TRACE 落盘,配对离线 DEBUG;配套 `trace-viewer.html`。禁用时零开销。
 - **`store`** — 通用 SQLite 层(WAL),schema 集中维护,**加表改 `store.go` 一处**。
 - **`stats`** — 在 store 之上异步落盘请求指标:有界 channel + 单 worker 批量 INSERT,热路径满即丢、永不阻塞,nil 安全。读侧 `query.go` 的 `QueryDailyUsage` 做按天×上游模型聚合,供 Grafana 端点用。
-- **`server`** — path→model 两级分派。`handleRoute` 编排:读 body→sniff model→resolve→算生效 model→trace/stats,再按协议是否相等分派到 `convertResponsesToChat` 或 `forwardRaw`(`forward.go`/`sseforward.go`)。两条路径都用 `passUpstreamError` 原样回传上游非 2xx。另有只读指标端点 `GET /stats/daily`(`stats.go`),返回 Grafana Infinity 数据源可直接消费的扁平 JSON。另有 `GET /stats/topology`(`topology.go`):把已加载的 route/upstream 配置输出成图(入口→规则→上游,含 forward/convert、生效 model、鉴权方式),脱敏(api_key 不出现在响应里)、不依赖 `APID_DB`,webui 的 routes 标签页消费它。
+- **`server`** — path→model 两级分派。`handleRoute` 编排:读 body→sniff model→resolve→算生效 model→trace/stats,再按协议是否相等(含 `supports_responses` 双协议透传)分派到 `convertResponsesToChat` 或 `forwardRaw`(`forward.go`/`sseforward.go`)。两条路径都用 `passUpstreamError` 原样回传上游非 2xx。另有只读指标端点 `GET /stats/daily`(`stats.go`),返回 Grafana Infinity 数据源可直接消费的扁平 JSON。另有 `GET /stats/topology`(`topology.go`):把已加载的 route/upstream 配置输出成图(入口→规则→上游,含 forward/convert、生效 model、鉴权方式),脱敏(api_key 不出现在响应里)、不依赖 `APID_DB`,webui 的 routes 标签页消费它。
 - **`main.go`** — 入口 + 优雅退出(Shutdown → srv.Close 排空 stats → store.Close)。
 
 ## 关键约定与不变量

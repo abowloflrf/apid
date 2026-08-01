@@ -101,6 +101,53 @@ input_protocol = "anthropic_messages"
 	}
 }
 
+// TestLoadFileValidDualProtocol: 一个同时支持 Chat 与 Responses 的供应商只写一份
+// upstream，responses_path 可从 path 推导。
+func TestLoadFileValidDualProtocol(t *testing.T) {
+	path := writeTOML(t, `
+[[upstream]]
+name = "openai"
+protocol = "openai_chat_completions"
+base_url = "https://api.openai.com"
+path = "/v1/chat/completions"
+api_key = "sk-xxx"
+supports_responses = true
+
+[[upstream]]
+name = "openai-custom"
+protocol = "openai_chat_completions"
+base_url = "https://api.example.com"
+path = "/v1/chat/completions"
+supports_responses = true
+responses_path = "/custom/responses"
+
+[[route]]
+path = "/v1/responses"
+input_protocol = "openai_responses"
+  [[route.model]]
+  upstream = "openai"
+  [[route.model]]
+  match = "custom-*"
+  upstream = "openai-custom"
+`)
+	ups, _, err := loadFile(path)
+	if err != nil {
+		t.Fatalf("loadFile failed: %v", err)
+	}
+	if !ups[0].SupportsResponses {
+		t.Errorf("upstream[0].SupportsResponses = false, want true")
+	}
+	if got := ups[0].EffectiveResponsesPath(); got != "/v1/responses" {
+		t.Errorf("EffectiveResponsesPath() = %q, want /v1/responses", got)
+	}
+	if !ups[1].SupportsResponses {
+		t.Errorf("upstream[1].SupportsResponses = false, want true")
+	}
+	if got := ups[1].EffectiveResponsesPath(); got != "/custom/responses" {
+		t.Errorf("EffectiveResponsesPath() = %q, want /custom/responses", got)
+	}
+}
+
 func TestLoadFileRejectsAnthropicConversion(t *testing.T) {
 	path := writeTOML(t, `
 [[upstream]]
@@ -351,6 +398,71 @@ input_protocol = "openai_chat_completions"
 [[route.model]]
 upstream = "u"`,
 			wantSubstr: "unknown keys",
+		},
+		{
+			name: "supports_responses on non-chat protocol",
+			toml: `
+[[upstream]]
+name = "u"
+protocol = "openai_responses"
+base_url = "b"
+path = "/v1/responses"
+supports_responses = true
+[[route]]
+path = "/x"
+input_protocol = "openai_responses"
+[[route.model]]
+upstream = "u"`,
+			wantSubstr: "supports_responses only applies to openai_chat_completions",
+		},
+		{
+			name: "responses_path without supports_responses",
+			toml: `
+[[upstream]]
+name = "u"
+protocol = "openai_chat_completions"
+base_url = "b"
+path = "/v1/chat/completions"
+responses_path = "/v1/responses"
+[[route]]
+path = "/x"
+input_protocol = "openai_chat_completions"
+[[route.model]]
+upstream = "u"`,
+			wantSubstr: "responses_path requires supports_responses",
+		},
+		{
+			name: "supports_responses without derivable path",
+			toml: `
+[[upstream]]
+name = "u"
+protocol = "openai_chat_completions"
+base_url = "b"
+path = "/v1/completions"
+supports_responses = true
+[[route]]
+path = "/x"
+input_protocol = "openai_responses"
+[[route.model]]
+upstream = "u"`,
+			wantSubstr: "responses_path",
+		},
+		{
+			name: "responses_path missing leading slash",
+			toml: `
+[[upstream]]
+name = "u"
+protocol = "openai_chat_completions"
+base_url = "b"
+path = "/v1/chat/completions"
+supports_responses = true
+responses_path = "v1/responses"
+[[route]]
+path = "/x"
+input_protocol = "openai_responses"
+[[route.model]]
+upstream = "u"`,
+			wantSubstr: "must start with /",
 		},
 	}
 	for _, tc := range cases {

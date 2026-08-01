@@ -10,6 +10,10 @@
 # Conversion happens when a route's input_protocol differs from the matched
 # upstream's protocol (currently only openai_responses -> openai_chat_completions).
 # Equal protocols = pure forward (bytes passed through, metrics still collected).
+# An upstream with protocol = "openai_chat_completions" and
+# supports_responses = true also serves OpenAI Responses natively: responses
+# routes hitting it forward raw bytes to its responses endpoint instead of
+# converting — no duplicate upstream needed for the same provider.
 # Protocols: openai_responses, openai_chat_completions, anthropic_messages.
 #
 # Optional inbound client auth for apid itself. Empty/omitted = disabled.
@@ -32,6 +36,9 @@ name = "openai"
 protocol = "openai_chat_completions"
 base_url = "https://api.openai.com"
 path = "/v1/chat/completions"
+supports_responses = true   # same backend also speaks Responses natively
+# responses_path = "/v1/responses"  # optional; empty = derived from path
+#                                  # (strip "/chat/completions", append "/responses")
 
 [[upstream]]
 name = "anthropic"
@@ -57,7 +64,8 @@ input_protocol = "openai_responses"
 
   [[route.model]]
   match = "*"              # empty or "*" = catch-all (at most one)
-  upstream = "openai"
+  upstream = "openai"      # supports_responses = true => native responses -> responses
+                           # passthrough (no conversion), forwarded to /v1/responses
   model = ""               # "" = force pass-through the client's model
                            # (omit the key instead to inherit upstream.model)
 

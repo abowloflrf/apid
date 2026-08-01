@@ -120,7 +120,11 @@ func run(logger *slog.Logger, configPath string) error {
 	logger.Info("apid started", "listen", cfg.Listen,
 		"upstreams", len(cfg.Upstreams), "routes", len(cfg.Routes))
 	for _, u := range cfg.Upstreams {
-		logger.Info("upstream", "name", u.Name, "endpoint", u.BaseURL+u.Path, "protocol", u.Protocol)
+		attrs := []any{"name", u.Name, "endpoint", u.BaseURL + u.Path, "protocol", u.Protocol}
+		if u.SupportsResponses {
+			attrs = append(attrs, "responses_endpoint", u.BaseURL+u.EffectiveResponsesPath())
+		}
+		logger.Info("upstream", attrs...)
 	}
 	for _, rt := range cfg.Routes {
 		for _, m := range rt.Models {

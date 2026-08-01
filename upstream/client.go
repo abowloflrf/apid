@@ -17,11 +17,12 @@ import (
 )
 
 type Client struct {
-	baseURL   string
-	path      string
-	apiKey    string
-	authStyle authStyle
-	http      *http.Client
+	baseURL       string
+	path          string
+	responsesPath string // optional second endpoint (OpenAI Responses); "" = not supported
+	apiKey        string
+	authStyle     authStyle
+	http          *http.Client
 }
 
 type authStyle int
@@ -38,6 +39,15 @@ type Option func(*Client)
 func WithXAPIKeyAuth() Option {
 	return func(c *Client) {
 		c.authStyle = authXAPIKey
+	}
+}
+
+// WithResponsesPath gives the client a second, OpenAI Responses endpoint
+// (baseURL + path) alongside the primary one. Callers use
+// ForwardResponsesWithQuery when one backend speaks both protocols.
+func WithResponsesPath(path string) Option {
+	return func(c *Client) {
+		c.responsesPath = ensureLeadingSlash(path)
 	}
 }
 
@@ -91,6 +101,24 @@ func (c *Client) EndpointWithQuery(rawQuery string) string {
 	return c.Endpoint() + "?" + rawQuery
 }
 
+// SupportsResponses reports whether a dedicated Responses endpoint is configured.
+func (c *Client) SupportsResponses() bool {
+	return c.responsesPath != ""
+}
+
+// ResponsesEndpoint returns the actual Responses endpoint URL (baseURL + responses path).
+func (c *Client) ResponsesEndpoint() string {
+	return c.baseURL + c.responsesPath
+}
+
+// ResponsesEndpointWithQuery returns ResponsesEndpoint plus the original query.
+func (c *Client) ResponsesEndpointWithQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return c.ResponsesEndpoint()
+	}
+	return c.ResponsesEndpoint() + "?" + rawQuery
+}
+
 // Forward POSTs the raw body bytes to Endpoint().
 // Client headers are passed through except auth/transport/CDN ones (see
 // skipForwardHeader). For auth the configured apiKey wins; if empty, the
@@ -103,7 +131,21 @@ func (c *Client) Forward(ctx context.Context, body []byte, clientHeader http.Hea
 // must preserve query parameters because some upstream-compatible APIs use them
 // as feature switches.
 func (c *Client) ForwardWithQuery(ctx context.Context, body []byte, clientHeader http.Header, rawQuery string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.EndpointWithQuery(rawQuery), bytes.NewReader(body))
+	return c.post(ctx, c.EndpointWithQuery(rawQuery), body, clientHeader)
+}
+
+// ForwardResponsesWithQuery is ForwardWithQuery but posts to the dedicated
+// Responses endpoint (see WithResponsesPath). Returns an error when no
+// Responses endpoint was configured.
+func (c *Client) ForwardResponsesWithQuery(ctx context.Context, body []byte, clientHeader http.Header, rawQuery string) (*http.Response, error) {
+	if c.responsesPath == "" {
+		return nil, fmt.Errorf("upstream: responses endpoint not configured")
+	}
+	return c.post(ctx, c.ResponsesEndpointWithQuery(rawQuery), body, clientHeader)
+}
+
+func (c *Client) post(ctx context.Context, url string, body []byte, clientHeader http.Header) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

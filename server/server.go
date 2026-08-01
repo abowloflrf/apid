@@ -41,15 +41,17 @@ type target struct {
 // exchange bundles the per-request state threaded through the two forwarding
 // paths (raw forward / protocol conversion).
 type exchange struct {
-	target *target
-	model  string              // effective model override; "" = pass the client model through
-	w      http.ResponseWriter // wraps the client connection; records status for the access log
-	req    *http.Request       // inbound request; auth headers already scrubbed when client auth is on
-	body   []byte
-	trace  *trace.Entry
-	stat   *stats.Record
-	live   *liveRequest // in-flight entry for the live dashboard; nil-safe
-	start  time.Time
+	target       *target
+	proto        config.Protocol     // protocol actually spoken upstream (wire protocol)
+	viaResponses bool                // raw-forward to the upstream's dedicated Responses endpoint
+	model        string              // effective model override; "" = pass the client model through
+	w            http.ResponseWriter // wraps the client connection; records status for the access log
+	req          *http.Request       // inbound request; auth headers already scrubbed when client auth is on
+	body         []byte
+	trace        *trace.Entry
+	stat         *stats.Record
+	live         *liveRequest // in-flight entry for the live dashboard; nil-safe
+	start        time.Time
 }
 
 type Server struct {
@@ -76,9 +78,13 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	}
 	upstreams := make(map[string]*target, len(cfg.Upstreams))
 	for _, uc := range cfg.Upstreams {
+		opts := upstreamOptions(uc.Protocol)
+		if uc.SupportsResponses {
+			opts = append(opts, upstream.WithResponsesPath(uc.EffectiveResponsesPath()))
+		}
 		upstreams[uc.Name] = &target{
 			cfg:    uc,
-			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey, upstreamOptions(uc.Protocol)...),
+			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey, opts...),
 		}
 	}
 	routes := make(map[string]config.Route, len(cfg.Routes))
@@ -271,14 +277,29 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		return
 	}
 	effModel := effectiveModel(rule, tg.cfg)
-	stat.UpstreamProtocol = string(tg.cfg.Protocol)
-	stat.UpstreamURL = tg.client.Endpoint()
-	if rt.InputProtocol == tg.cfg.Protocol {
-		stat.UpstreamURL = tg.client.EndpointWithQuery(r.URL.RawQuery)
-	}
 	stat.UpstreamModel = sniff.Model
 	if effModel != "" {
 		stat.UpstreamModel = effModel
+	}
+
+	// A chat upstream with supports_responses also serves the Responses protocol
+	// natively: a responses route then forwards raw bytes to its Responses
+	// endpoint instead of going through responses -> chat conversion. The wire
+	// protocol seen upstream is openai_responses, not the configured primary.
+	wireProto := tg.cfg.Protocol
+	viaResponses := false
+	if rt.InputProtocol == config.ProtoResponses && tg.cfg.Protocol == config.ProtoChat && tg.cfg.SupportsResponses {
+		wireProto = config.ProtoResponses
+		viaResponses = true
+	}
+	stat.UpstreamProtocol = string(wireProto)
+	switch {
+	case viaResponses:
+		stat.UpstreamURL = tg.client.ResponsesEndpointWithQuery(r.URL.RawQuery)
+	case rt.InputProtocol == wireProto:
+		stat.UpstreamURL = tg.client.EndpointWithQuery(r.URL.RawQuery)
+	default:
+		stat.UpstreamURL = tg.client.Endpoint()
 	}
 
 	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
@@ -290,7 +311,7 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		clientModel:   sniff.Model,
 		upstreamModel: stat.UpstreamModel,
 		clientProto:   string(rt.InputProtocol),
-		upstreamProto: string(tg.cfg.Protocol),
+		upstreamProto: string(wireProto),
 		upstream:      rule.Upstream,
 		path:          rt.Path,
 		ua:            r.UserAgent(),
@@ -300,18 +321,21 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	defer live.end()
 
 	ex := &exchange{
-		target: tg,
-		model:  effModel,
-		w:      rec,
-		req:    upstreamReq,
-		body:   bodyBytes,
-		trace:  traceEntry,
-		stat:   &stat,
-		live:   live,
-		start:  start,
+		target:       tg,
+		proto:        wireProto,
+		viaResponses: viaResponses,
+		model:        effModel,
+		w:            rec,
+		req:          upstreamReq,
+		body:         bodyBytes,
+		trace:        traceEntry,
+		stat:         &stat,
+		live:         live,
+		start:        start,
 	}
-	// Same protocol on both ends => raw forward; otherwise convert.
-	if rt.InputProtocol == tg.cfg.Protocol {
+	// Same protocol on both ends (including responses -> responses via a
+	// dual-protocol upstream) => raw forward; otherwise convert.
+	if rt.InputProtocol == wireProto {
 		s.forwardRaw(ex)
 		return
 	}

@@ -76,6 +76,39 @@ func TestTopology(t *testing.T) {
 	}
 }
 
+// TestTopologyDualProtocol: supports_responses 的 upstream 在 responses 入口下
+// 显示为 raw forward（via_responses），端点换成 responses 端点。
+func TestTopologyDualProtocol(t *testing.T) {
+	cfg := config.Config{
+		Upstreams: []config.Upstream{{
+			Name:              "up",
+			Protocol:          config.ProtoChat,
+			BaseURL:           "https://api.example.com",
+			Path:              "/v1/chat/completions",
+			SupportsResponses: true,
+		}},
+		Routes: []config.Route{{
+			Path:          "/v1/responses",
+			InputProtocol: config.ProtoResponses,
+			Models:        []config.ModelRule{{Upstream: "up"}},
+		}},
+	}
+	top := New(cfg, &store.Store{}, nil).topology()
+
+	r := top.Routes[0].Rules[0]
+	if r.Mode != "forward" || !r.ViaResponses || r.UpstreamProto != string(config.ProtoResponses) {
+		t.Errorf("rule = %+v, want forward via responses with wire protocol openai_responses", r)
+	}
+	if r.Endpoint != "https://api.example.com/v1/responses" {
+		t.Errorf("rule endpoint = %q, want responses endpoint", r.Endpoint)
+	}
+
+	u := top.Upstreams[0]
+	if !u.SupportsResponses || u.ResponsesEndpoint != "https://api.example.com/v1/responses" {
+		t.Errorf("upstream = %+v, want supports_responses with responses endpoint", u)
+	}
+}
+
 // Upstream keys must never reach the browser; only the mode they imply.
 func TestTopologyHidesSecrets(t *testing.T) {
 	cfg := topologyConfig()

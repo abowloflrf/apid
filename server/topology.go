@@ -34,15 +34,17 @@ type searchInfo struct {
 }
 
 type upstreamInfo struct {
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	BaseURL  string `json:"base_url"`
-	Path     string `json:"path"`
-	Endpoint string `json:"endpoint"`
-	Model    string `json:"model"`       // upstream-level rewrite; "" = pass through
-	Auth     string `json:"auth"`        // api_key | passthrough | stripped
-	AuthHdr  string `json:"auth_header"` // header the key is sent in; "" when no key
-	RefCount int    `json:"ref_count"`   // model rules pointing here
+	Name              string `json:"name"`
+	Protocol          string `json:"protocol"`
+	BaseURL           string `json:"base_url"`
+	Path              string `json:"path"`
+	Endpoint          string `json:"endpoint"`
+	SupportsResponses bool   `json:"supports_responses"`           // dual-protocol backend: chat + Responses
+	ResponsesEndpoint string `json:"responses_endpoint,omitempty"` // Responses endpoint when supports_responses
+	Model             string `json:"model"`                        // upstream-level rewrite; "" = pass through
+	Auth              string `json:"auth"`                         // api_key | passthrough | stripped
+	AuthHdr           string `json:"auth_header"`                  // header the key is sent in; "" when no key
+	RefCount          int    `json:"ref_count"`                    // model rules pointing here
 }
 
 type routeInfo struct {
@@ -59,6 +61,7 @@ type ruleInfo struct {
 	Upstream       string `json:"upstream"`
 	UpstreamProto  string `json:"upstream_protocol"`
 	Mode           string `json:"mode"`            // forward | convert
+	ViaResponses   bool   `json:"via_responses"`   // raw forward to the upstream's Responses endpoint
 	ModelSource    string `json:"model_source"`    // rule | upstream | passthrough
 	EffectiveModel string `json:"effective_model"` // "" when the client's model passes through
 	Endpoint       string `json:"endpoint"`
@@ -100,7 +103,14 @@ func (s *Server) topology() topologyResponse {
 			r.Endpoint = tg.client.Endpoint()
 			r.Mode = "forward"
 			if rt.InputProtocol != tg.cfg.Protocol {
-				r.Mode = "convert"
+				if rt.InputProtocol == config.ProtoResponses && tg.cfg.SupportsResponses {
+					// Dual-protocol backend: no conversion, raw bytes to /v1/responses.
+					r.UpstreamProto = string(config.ProtoResponses)
+					r.Endpoint = tg.client.ResponsesEndpoint()
+					r.ViaResponses = true
+				} else {
+					r.Mode = "convert"
+				}
 			}
 			r.ModelSource, r.EffectiveModel = modelPlan(m, tg.cfg)
 			ri.Rules = append(ri.Rules, r)
@@ -121,6 +131,10 @@ func (s *Server) topology() topologyResponse {
 		}
 		if tg, ok := s.upstreams[u.Name]; ok {
 			ui.Endpoint = tg.client.Endpoint()
+			if u.SupportsResponses {
+				ui.SupportsResponses = true
+				ui.ResponsesEndpoint = tg.client.ResponsesEndpoint()
+			}
 		}
 		if u.APIKey != "" {
 			ui.AuthHdr = "Authorization: Bearer"

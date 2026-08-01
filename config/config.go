@@ -37,12 +37,26 @@ type Config struct {
 // Upstream is a backend deployment, referenced by Name from any number of routes
 // so its address/auth/model are written once, not per entrypoint.
 type Upstream struct {
-	Name     string   `toml:"name"`
-	Protocol Protocol `toml:"protocol"`
-	BaseURL  string   `toml:"base_url"`
-	Path     string   `toml:"path"`
-	APIKey   string   `toml:"api_key"` // empty = pass through client auth unless client_api_key is enabled
-	Model    string   `toml:"model"`   // empty = pass through client model
+	Name              string   `toml:"name"`
+	Protocol          Protocol `toml:"protocol"`
+	BaseURL           string   `toml:"base_url"`
+	Path              string   `toml:"path"`
+	APIKey            string   `toml:"api_key"`            // empty = pass through client auth unless client_api_key is enabled
+	Model             string   `toml:"model"`              // empty = pass through client model
+	SupportsResponses bool     `toml:"supports_responses"` // backend also speaks OpenAI Responses natively
+	ResponsesPath     string   `toml:"responses_path"`     // optional; empty = derived from Path
+}
+
+// EffectiveResponsesPath returns the OpenAI Responses endpoint path actually
+// used when SupportsResponses is set: an explicit responses_path wins, otherwise
+// Path's trailing "/chat/completions" is swapped for "/responses"
+// ("/v1/chat/completions" -> "/v1/responses", "/chat/completions" -> "/responses").
+// Validation guarantees the result is non-empty for dual-protocol upstreams.
+func (u Upstream) EffectiveResponsesPath() string {
+	if u.ResponsesPath != "" {
+		return u.ResponsesPath
+	}
+	return strings.TrimSuffix(u.Path, "/chat/completions") + "/responses"
 }
 
 // ModelRule dispatches a route by model. Match is an exact name, a glob
@@ -216,6 +230,18 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		}
 		if u.Path == "" {
 			return fmt.Errorf("config: upstream %q path must not be empty", u.Name)
+		}
+		if u.SupportsResponses && u.Protocol != ProtoChat {
+			return fmt.Errorf("config: upstream %q supports_responses only applies to openai_chat_completions (protocol is %q)", u.Name, u.Protocol)
+		}
+		if u.ResponsesPath != "" && !u.SupportsResponses {
+			return fmt.Errorf("config: upstream %q responses_path requires supports_responses = true", u.Name)
+		}
+		if u.SupportsResponses && u.ResponsesPath == "" && !strings.HasSuffix(u.Path, "/chat/completions") {
+			return fmt.Errorf("config: upstream %q supports_responses needs an explicit responses_path (cannot derive it from path %q)", u.Name, u.Path)
+		}
+		if u.ResponsesPath != "" && !strings.HasPrefix(u.ResponsesPath, "/") {
+			return fmt.Errorf("config: upstream %q responses_path %q must start with /", u.Name, u.ResponsesPath)
 		}
 		byName[u.Name] = u
 	}
