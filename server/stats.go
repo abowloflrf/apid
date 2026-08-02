@@ -16,8 +16,18 @@ import (
 // lib/), served read-only at /stats/. Embedding keeps apid a single binary with
 // no external CDN dependency, so the UI works air-gapped.
 //
+// webui/dist is gitignored except a placeholder.txt, so the embed always
+// compiles; webuiBuilt tells whether a real build is embedded.
+//
 //go:embed webui/dist
 var webuiFS embed.FS
+
+// webuiBuilt is false when webui/dist only contains the committed
+// placeholder.txt (frontend never built); the UI then degrades to a 503 hint.
+var webuiBuilt = func() bool {
+	_, err := webuiFS.Open("webui/dist/index.html")
+	return err == nil
+}()
 
 // handleStatsDaily serves per-day, per-upstream-model usage as a flat JSON
 // array for Grafana's Infinity datasource. Query params (all optional):
@@ -222,6 +232,10 @@ func (s *Server) statsUIHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.db == nil {
 			writeError(w, http.StatusServiceUnavailable, "stats storage not enabled (set APID_DB)")
+			return
+		}
+		if !webuiBuilt {
+			writeError(w, http.StatusServiceUnavailable, "webui not built (run pnpm --dir webui build)")
 			return
 		}
 		fileServer.ServeHTTP(w, r)

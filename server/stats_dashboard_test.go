@@ -122,6 +122,14 @@ func TestDashboardRoutingPrecedence(t *testing.T) {
 	page := httptest.NewRequest("GET", "/stats/", nil)
 	pw := httptest.NewRecorder()
 	h.ServeHTTP(pw, page)
+	if !webuiBuilt {
+		// Frontend not built: the committed placeholder only makes the embed
+		// compile; the UI is intentionally unavailable.
+		if pw.Code != http.StatusServiceUnavailable {
+			t.Fatalf("/stats/ status = %d, want 503 (webui not built)", pw.Code)
+		}
+		return
+	}
 	if pw.Code != http.StatusOK {
 		t.Fatalf("/stats/ status = %d, want 200", pw.Code)
 	}
@@ -130,9 +138,7 @@ func TestDashboardRoutingPrecedence(t *testing.T) {
 	}
 
 	// Vite emits hashed asset filenames (assets/index-*.js/css), so resolve one
-	// from the served page instead of hard-coding a path. When the dist output
-	// hasn't been built yet the page is the committed placeholder (no assets),
-	// which still proves routing works without failing the test.
+	// from the served page instead of hard-coding a path.
 	assetMatch := assetRef.FindStringSubmatch(pw.Body.String())
 	if len(assetMatch) < 2 {
 		return

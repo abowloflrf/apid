@@ -42,6 +42,8 @@ __pycache__/
 .DS_Store
 
 # webui 前端工程（node_modules；构建产物进 server/webui/dist，必须先 build 前端再 go build）
+# 例外：保留 placeholder.txt 占位，保证未构建时 //go:embed 也能编译（运行时 /stats/ 会 503 提示）
 node_modules/
 *.tsbuildinfo
-server/webui/dist/
+server/webui/dist/*
+!server/webui/dist/placeholder.txt

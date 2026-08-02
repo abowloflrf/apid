@@ -1,0 +1,1 @@
+Placeholder so //go:embed webui/dist compiles before the frontend is built. Run: pnpm --dir webui build
