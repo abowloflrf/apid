@@ -22,6 +22,13 @@
 # Only forwarding routes require it; /healthz and /stats(/*) stay open.
 # client_api_key = "apid-local-static-key"
 
+# Optional key for the read-only dashboard and its JSON API (GET /stats,
+# /stats/*). Empty/omitted = stats stay open. When set, requests must present
+# the key as Authorization: Bearer <key>, X-Api-Key: <key>, or Api-Key: <key>.
+# Independent of client_api_key: Grafana can send this same header, while
+# forwarding routes keep using client_api_key.
+# stats_api_key = "apid-stats-view-key"
+
 # ── Upstreams: write each backend once, reuse from any entrypoint. ──
 [[upstream]]
 name = "deepseek"

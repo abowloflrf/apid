@@ -1,3 +1,14 @@
+# ---- webui build stage ----
+FROM node:24-alpine AS webui
+WORKDIR /src
+RUN corepack enable
+COPY webui/package.json webui/pnpm-lock.yaml webui/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY webui/ ./
+# vite.config.ts outDir is "../server/webui/dist" relative to webui/,
+# which resolves to /server/webui/dist inside this container.
+RUN pnpm build
+
 # ---- build stage ----
 # Run on the builder's native arch and cross-compile, so multi-platform
 # builds never compile Go under QEMU emulation.
@@ -15,6 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 ARG TARGETOS TARGETARCH
 ARG GOEXPERIMENT=jsonv2
 COPY . .
+COPY --from=webui /server/webui/dist /src/server/webui/dist
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOEXPERIMENT=$GOEXPERIMENT \

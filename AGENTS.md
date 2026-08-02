@@ -25,7 +25,9 @@
 ## 常用命令
 
 ```bash
-go build ./...                                   # 编译
+pnpm --dir webui build                           # 前端构建（Vite+React，产物进 server/webui/dist）
+pnpm --dir webui dev                             # 前端开发（Vite dev server，代理 /stats/* 到本地 :19092）
+go build ./...                                   # 编译（依赖前端产物，未构建时页面显示占位提示）
 go vet ./...                                     # 静态检查
 go test ./...                                    # 全部测试
 go test ./convert -run TestStreamTools  # 跑单个测试(按名匹配)
@@ -62,6 +64,7 @@ go run .                                          # 启动服务
 - **`store`** — 通用 SQLite 层(WAL),schema 集中维护,**加表改 `store.go` 一处**。
 - **`stats`** — 在 store 之上异步落盘请求指标:有界 channel + 单 worker 批量 INSERT,热路径满即丢、永不阻塞,nil 安全。读侧 `query.go` 的 `QueryDailyUsage` 做按天×上游模型聚合,供 Grafana 端点用。
 - **`server`** — path→model 两级分派。`handleRoute` 编排:读 body→sniff model→resolve→算生效 model→trace/stats,再按协议是否相等(含 `supports_responses` 双协议透传)分派到 `convertResponsesToChat` 或 `forwardRaw`(`forward.go`/`sseforward.go`)。两条路径都用 `passUpstreamError` 原样回传上游非 2xx。另有只读指标端点 `GET /stats/daily`(`stats.go`),返回 Grafana Infinity 数据源可直接消费的扁平 JSON。另有 `GET /stats/topology`(`topology.go`):把已加载的 route/upstream 配置输出成图(入口→规则→上游,含 forward/convert、生效 model、鉴权方式),脱敏(api_key 不出现在响应里)、不依赖 `APID_DB`,webui 的 routes 标签页消费它。
+- **`webui`** — Vite + React + TS 前端:`src/components` 通用组件、`src/views` 页面视图、`src/useStatsQuery.ts` 统一查询状态(范围/筛选/分页),构建产物进 `server/webui/dist`,由 `server/stats.go` 的 `//go:embed webui/dist` 嵌入(APID_DB 未开时 `/stats/` 返回 503)。**入库的 `dist/index.html` 是占位页**(保证未构建时 go build 可编译、页面显示占位提示);`pnpm build` 会把它覆盖成产物页,提交前用 `git restore server/webui/dist/index.html` 恢复(assets 不入库)。
 - **`main.go`** — 入口 + 优雅退出(Shutdown → srv.Close 排空 stats → store.Close)。
 
 ## 关键约定与不变量

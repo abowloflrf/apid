@@ -543,6 +543,17 @@ func TestLoadClientAPIKeyFromConfig(t *testing.T) {
 	}
 }
 
+func TestLoadStatsAPIKeyFromConfig(t *testing.T) {
+	isolateEnv(t)
+	cfg, err := Load(writeTOML(t, `stats_api_key = "stats-view-key"`+minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StatsAPIKey != "stats-view-key" {
+		t.Errorf("StatsAPIKey = %q, want stats-view-key", cfg.StatsAPIKey)
+	}
+}
+
 func TestLoadEnvOverrides(t *testing.T) {
 	isolateEnv(t)
 	t.Setenv("APID_LISTEN", ":8080")

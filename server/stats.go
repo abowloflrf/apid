@@ -16,7 +16,7 @@ import (
 // lib/), served read-only at /stats/. Embedding keeps apid a single binary with
 // no external CDN dependency, so the UI works air-gapped.
 //
-//go:embed webui
+//go:embed webui/dist
 var webuiFS embed.FS
 
 // handleStatsDaily serves per-day, per-upstream-model usage as a flat JSON
@@ -212,7 +212,7 @@ func (s *Server) statsFilter(w http.ResponseWriter, r *http.Request) (stats.Filt
 // statsUIHandler serves the embedded dashboard at /stats/. It 503s when storage
 // is off so the UI isn't reachable without data behind it.
 func (s *Server) statsUIHandler() http.Handler {
-	sub, err := fs.Sub(webuiFS, "webui")
+	sub, err := fs.Sub(webuiFS, "webui/dist")
 	if err != nil {
 		// Embed paths are compile-time constants, so this never fails in practice.
 		s.log.Error("stats webui sub-fs failed", "err", err)

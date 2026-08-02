@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,10 @@ import (
 	"github.com/abowloflrf/apid/stats"
 	"github.com/abowloflrf/apid/store"
 )
+
+// assetRef matches the Vite-built page's relative asset references
+// ("./assets/index-<hash>.js"), whose filenames change on every build.
+var assetRef = regexp.MustCompile(`(?:src|href)="\./(assets/[^"]+)"`)
 
 func seedServer(t *testing.T) *Server {
 	t.Helper()
@@ -124,11 +129,19 @@ func TestDashboardRoutingPrecedence(t *testing.T) {
 		t.Errorf("/stats/ did not serve the dashboard page")
 	}
 
-	asset := httptest.NewRequest("GET", "/stats/lib/chart.umd.min.js", nil)
+	// Vite emits hashed asset filenames (assets/index-*.js/css), so resolve one
+	// from the served page instead of hard-coding a path. When the dist output
+	// hasn't been built yet the page is the committed placeholder (no assets),
+	// which still proves routing works without failing the test.
+	assetMatch := assetRef.FindStringSubmatch(pw.Body.String())
+	if len(assetMatch) < 2 {
+		return
+	}
+	asset := httptest.NewRequest("GET", "/stats/"+assetMatch[1], nil)
 	aw2 := httptest.NewRecorder()
 	h.ServeHTTP(aw2, asset)
 	if aw2.Code != http.StatusOK {
-		t.Errorf("/stats/app.js status = %d, want 200", aw2.Code)
+		t.Errorf("/stats/%s status = %d, want 200", assetMatch[1], aw2.Code)
 	}
 }
 

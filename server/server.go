@@ -64,6 +64,7 @@ type Server struct {
 	db              *sql.DB          // read-only handle for the stats query API; nil when storage is off
 	reasoning       *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
 	apiKey          string           // optional inbound client API key; empty = no client auth
+	statsAPIKey     string           // optional key for the read-only /stats(*) dashboard/API; empty = open
 	search          *search.Handler  // nil when [search] is not configured
 	searchPathField string           // mount path for search endpoint; "" = not configured
 	live            *liveRegistry    // in-flight requests, for GET /stats/active
@@ -105,6 +106,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		db:              db,
 		reasoning:       reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
 		apiKey:          cfg.ClientAPIKey,
+		statsAPIKey:     cfg.StatsAPIKey,
 		search:          newSearchHandler(cfg.Search, logger),
 		searchPathField: searchPathFromConfig(cfg.Search),
 		live:            newLiveRegistry(),
@@ -355,11 +357,22 @@ func (s *Server) authorizeClient(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) withClientAuth(next http.Handler) http.Handler {
-	if s.apiKey == "" {
+	if s.apiKey == "" && s.statsAPIKey == "" {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if authExemptPath(r) {
+		// The health probe stays open so load balancers/uptime probes work.
+		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// The read-only stats/dashboard subtree is guarded by its own key, so
+		// ops can expose metrics (or keep Grafana working) independently of the
+		// forwarding routes' client key.
+		if isStatsPath(r) {
+			if !s.authorizeStats(w, r) {
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -370,16 +383,27 @@ func (s *Server) withClientAuth(next http.Handler) http.Handler {
 	})
 }
 
-// authExemptPath reports whether a request bypasses client auth: the health
-// probe and the read-only stats/dashboard endpoints (GET /stats and /stats/*),
-// so the embedded dashboard and Grafana keep working. Only the forwarding
-// routes (POST) require the client key.
-func authExemptPath(r *http.Request) bool {
+// isStatsPath reports whether the request targets the read-only stats
+// dashboard or one of its JSON API endpoints.
+func isStatsPath(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
 	p := r.URL.Path
-	return p == "/healthz" || p == "/stats" || strings.HasPrefix(p, "/stats/")
+	return p == "/stats" || strings.HasPrefix(p, "/stats/")
+}
+
+// authorizeStats enforces the optional stats/dashboard key. Empty key = open.
+func (s *Server) authorizeStats(w http.ResponseWriter, r *http.Request) bool {
+	if s.statsAPIKey == "" {
+		return true
+	}
+	if clientKeyMatches(r.Header, s.statsAPIKey) {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer realm="apid-stats"`)
+	writeError(w, http.StatusUnauthorized, "invalid or missing stats API key")
+	return false
 }
 
 // clientKeyMatches accepts the common API-key header styles used by OpenAI-like

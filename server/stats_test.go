@@ -77,7 +77,7 @@ func TestHandleStatsDailyBadParam(t *testing.T) {
 	}
 }
 
-func TestClientAPIKeyExemptsHealthAndStats(t *testing.T) {
+func TestClientAPIKeyLeavesStatsOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stats.db")
 	st, err := store.Open(path)
 	if err != nil {
@@ -88,14 +88,14 @@ func TestClientAPIKeyExemptsHealthAndStats(t *testing.T) {
 	srv := New(config.Config{ClientAPIKey: "apid-key"}, st, nil)
 	h := srv.Handler()
 
-	// With client auth on, the health probe and read-only stats/dashboard
-	// endpoints stay open (no key) so the embedded dashboard and Grafana work.
+	// The client key only guards forwarding routes. The stats/dashboard subtree
+	// is independent and stays open until stats_api_key is configured.
 	for _, path := range []string{"/healthz", "/stats/daily", "/stats/summary", "/stats/"} {
 		req := httptest.NewRequest("GET", path, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
 		if w.Code == http.StatusUnauthorized {
-			t.Errorf("GET %s should bypass client auth, got 401", path)
+			t.Errorf("GET %s should not be guarded by client_api_key, got 401", path)
 		}
 	}
 }

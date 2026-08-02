@@ -29,6 +29,7 @@ type Config struct {
 	TraceDir     string       // APID_TRACE_DIR / APID_TRACE; empty = off
 	DB           string       // APID_DB; empty = off
 	ClientAPIKey string       // client_api_key in TOML; empty = no inbound client auth
+	StatsAPIKey  string       // stats_api_key in TOML; empty = /stats(*) dashboard stays open
 	Search       SearchConfig // optional; zero value = search endpoint disabled
 	Upstreams    []Upstream
 	Routes       []Route
@@ -144,6 +145,7 @@ func globMatch(pattern, s string) bool {
 
 type fileConfig struct {
 	ClientAPIKey string       `toml:"client_api_key"`
+	StatsAPIKey  string       `toml:"stats_api_key"`
 	Search       SearchConfig `toml:"search"`
 	Upstreams    []Upstream   `toml:"upstream"`
 	Routes       []Route      `toml:"route"`
@@ -174,6 +176,7 @@ func Load(configPath string) (Config, error) {
 		TraceDir:     traceDir,
 		DB:           env("APID_DB", ""),
 		ClientAPIKey: fc.ClientAPIKey,
+		StatsAPIKey:  fc.StatsAPIKey,
 		Search:       fc.Search,
 		Upstreams:    fc.Upstreams,
 		Routes:       fc.Routes,
