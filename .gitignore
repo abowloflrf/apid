@@ -6,6 +6,17 @@
 # Go
 /vendor/
 
+# Python（scripts 下新增的脚本/工具）
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# scripts 本地一次性脚本/审查产物，不入库
+/scripts/test_codex_sessions.py
+/scripts/codex_sessions_review.md
+
 # TRACE 落盘日志
 /logs/
 
