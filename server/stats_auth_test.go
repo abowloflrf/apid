@@ -15,7 +15,7 @@ func TestStatsAPIKeyProtectsStatsEndpoints(t *testing.T) {
 	srv := New(config.Config{StatsAPIKey: "stats-key"}, nil, nil)
 	h := srv.Handler()
 
-	for _, path := range []string{"/stats/topology", "/stats/", "/stats"} {
+	for _, path := range []string{"/stats/topology", "/stats/active", "/stats/sessions", "/stats/", "/stats"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != http.StatusUnauthorized {

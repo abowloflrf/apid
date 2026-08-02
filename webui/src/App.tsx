@@ -5,11 +5,12 @@ import { StatsTopbar } from "./components/StatsTopbar";
 import { ToastHost } from "./components/Toast";
 import { useStatsQuery } from "./useStatsQuery";
 import { LiveView } from "./views/LiveView";
+import { SessionsView } from "./views/SessionsView";
 import { StatsView } from "./views/StatsView";
 import { TopologyView } from "./views/TopologyView";
 import type { Options } from "./types";
 
-const VIEWS = ["stats", "live", "routes"];
+const VIEWS = ["stats", "live", "routes", "sessions"];
 const viewFromHash = (): string => (VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "stats");
 
 export default function App() {
@@ -17,12 +18,14 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [liveCount, setLiveCount] = useState(0);
   const [topoRefreshKey, setTopoRefreshKey] = useState(0);
+  const [sessRefreshKey, setSessRefreshKey] = useState(0);
   const q = useStatsQuery();
 
   // View-specific body classes (grid layout etc.), mirroring the original app.
   useEffect(() => {
     document.body.classList.toggle("view-routes", view === "routes");
     document.body.classList.toggle("view-live", view === "live");
+    document.body.classList.toggle("view-sessions", view === "sessions");
   }, [view]);
 
   // Hash-based view routing: #stats / #live / #routes.
@@ -92,11 +95,12 @@ export default function App() {
         onView={goView}
         q={q}
         liveCount={liveCount}
-        onRefresh={() => (view === "routes" ? setTopoRefreshKey((k) => k + 1) : void q.loadAll())}
+        onRefresh={() => (view === "routes" ? setTopoRefreshKey((k) => k + 1) : view === "sessions" ? setSessRefreshKey((k) => k + 1) : void q.loadAll())}
       />
       <main>
         {view === "stats" && <StatsView q={q} />}
         {view === "routes" && <TopologyView refreshKey={topoRefreshKey} />}
+        {view === "sessions" && <SessionsView refreshKey={sessRefreshKey} />}
         {view === "live" && <LiveView onLiveCount={setLiveCount} />}
       </main>
       <ToastHost />

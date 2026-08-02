@@ -23,6 +23,12 @@
   --teal: #5f9499;
   --pink: #b98ca0;
 
+  /* Agent brand accents for session tool badges: Anthropic terracotta,
+     codex indigo-blue, pi sage (reuses --green), opencode Apple blue. */
+  --brand-claude: #c5785b;
+  --brand-codex: #7a6fce;
+  --brand-opencode: #3d7fc0;
+
   /* Shadows are a whisper, reserved for things that genuinely float (popovers,
      toast, tooltips). Cards and bars rely on hairline borders alone. */
   --shadow-sm: 0 1px 1px rgba(40, 36, 28, .03);
@@ -357,6 +363,21 @@ main { padding: 24px 26px 64px; max-width: 1600px; margin: 0 auto; }
   border-radius: 8px; padding: 10px 12px; margin-top: 4px; white-space: pre-wrap; word-break: break-word;
 }
 
+/* ---- Session detail modal ---- */
+.sess-modal-dialog { max-width: 720px; }
+.sess-modal-dialog .modal-body { padding: 0; }
+.sess-modal-dialog .modal-head {
+  display: block;
+  position: relative;
+  padding: 42px 64px 18px 24px;
+}
+.sess-modal-dialog .modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+}
+.sess-modal-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
 /* ---- Skeletons (first-load placeholders) ---- */
 .skel { position: relative; overflow: hidden; background: var(--panel-2); border-radius: 7px; }
 .skel::after {
@@ -667,3 +688,239 @@ body.view-routes .filters { display: none; }
   cursor: pointer;
 }
 .login-card button:disabled { opacity: .55; cursor: default; }
+
+/* ---- Sessions view (agent transcripts) ---- */
+
+body.view-sessions .filters { display: none; }
+
+#sessionsView { display: flex; flex-direction: column; gap: 14px; }
+
+.sess-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sess-bar .tool-btn {
+  padding: 2px 10px; border: 1px solid transparent; border-radius: 12px;
+  background: transparent; color: var(--muted); font-size: 11px; font-weight: 700;
+  letter-spacing: .2px; cursor: pointer; white-space: nowrap; transition: all .12s;
+}
+/* Idle: brand-tinted pill, same palette as the session tool badges. */
+.tool-btn.t-codex { color: var(--brand-codex); background: rgba(122, 111, 206, .1); border-color: rgba(122, 111, 206, .35); }
+.tool-btn.t-claude { color: var(--brand-claude); background: rgba(197, 120, 91, .1); border-color: rgba(197, 120, 91, .35); }
+.tool-btn.t-pi { color: var(--green); background: rgba(111, 149, 118, .12); border-color: rgba(111, 149, 118, .35); }
+.tool-btn.t-opencode { color: var(--brand-opencode); background: rgba(61, 127, 192, .1); border-color: rgba(61, 127, 192, .35); }
+/* Active: solid brand fill. */
+.tool-btn.t-codex.on { background: var(--brand-codex); border-color: var(--brand-codex); color: #fff; }
+.tool-btn.t-claude.on { background: var(--brand-claude); border-color: var(--brand-claude); color: #fff; }
+.tool-btn.t-pi.on { background: var(--green); border-color: var(--green); color: #fff; }
+.tool-btn.t-opencode.on { background: var(--brand-opencode); border-color: var(--brand-opencode); color: #fff; }
+.tool-btn:hover:not(.on) { border-color: currentColor; }
+
+.sess-search {
+  width: 220px; padding: 4px 10px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  outline: none; transition: border-color .12s;
+}
+.sess-search:focus { border-color: var(--accent); }
+
+.sess-summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px;
+}
+.ss-kpis { display: flex; align-items: baseline; gap: 6px; }
+.ss-kpis .k { color: var(--muted-2); font-size: 11px; }
+.ss-kpis .v { color: var(--text-strong); font-weight: 700; }
+
+.sess-table { min-width: 900px; table-layout: fixed; }
+.sess-table th, .sess-table td { padding-left: 8px; padding-right: 8px; }
+.sess-table th { cursor: default; text-align: left; }
+.sess-table td { max-width: 0; }
+.sess-table .sess-col-time { width: 124px; }
+.sess-table .sess-col-tool { width: clamp(96px, 11vw, 132px); }
+.sess-table .sess-col-title { width: auto; }
+.sess-table .sess-col-model { width: clamp(140px, 13vw, 195px); }
+.sess-table .sess-col-cwd { width: clamp(128px, 12vw, 175px); }
+.sess-table .sess-col-tokens { width: 74px; }
+.sess-table .sess-col-cache { width: 68px; }
+.sess-row { cursor: pointer; }
+.sess-table td.sess-time {
+  color: var(--muted); font-family: var(--mono); font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.sess-table td.sess-tool { text-align: left; }
+.sess-title-cell {
+  display: flex; align-items: center; min-width: 0; width: 100%;
+}
+.sess-table td.sess-title .title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-strong);
+}
+.sess-table td.sess-model, .sess-table td.sess-cwd { font-family: var(--mono); }
+.sess-table td.sess-model { color: var(--text); }
+.sess-table td.sess-cwd { color: var(--muted); }
+.sess-ellipsis {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sess-table td.sess-tokens, .sess-table td.sess-cache { padding-left: 8px; padding-right: 8px; }
+/* Token ladder: heavier sessions get darker, bolder numerals. */
+.sess-tokens.tok-0 { color: var(--muted-2); font-weight: 400; }
+.sess-tokens.tok-1 { color: var(--muted); font-weight: 500; }
+.sess-tokens.tok-2 { color: var(--text); font-weight: 600; }
+.sess-tokens.tok-3 { color: var(--text-strong); font-weight: 700; }
+.sess-tokens.tok-4 { color: var(--text-strong); font-weight: 800; }
+
+.tool-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 10px; font-weight: 800; letter-spacing: .3px; line-height: 1.5;
+  background: var(--panel-2); color: var(--muted); border: 1px solid var(--border);
+}
+/* Each tool gets a tinted pill in its brand color. */
+.tool-badge.t-codex { color: var(--brand-codex); background: rgba(122, 111, 206, .12); border-color: rgba(122, 111, 206, .4); }
+.tool-badge.t-claude { color: var(--brand-claude); background: rgba(197, 120, 91, .12); border-color: rgba(197, 120, 91, .4); }
+.tool-badge.t-pi { color: var(--green); background: rgba(111, 149, 118, .14); border-color: rgba(111, 149, 118, .4); }
+.tool-badge.t-opencode { color: var(--brand-opencode); background: rgba(61, 127, 192, .12); border-color: rgba(61, 127, 192, .4); }
+
+.pill.archived {
+  flex: none; background: var(--panel-3); color: var(--muted);
+  margin-left: 8px; font-weight: 600;
+}
+
+.sd-eyebrow, .sd-section-title, .sd-stat-label {
+  color: var(--muted-2); font-size: 9.5px; font-weight: 700; letter-spacing: .8px;
+  text-transform: uppercase;
+}
+.sd-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-strong); font-family: var(--sans); font-size: 14px; font-weight: 650;
+}
+.sd-identity {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px;
+  min-width: 0; margin-top: 5px; color: var(--muted-2); font-size: 10px;
+}
+.sd-identity .tool-badge { flex: none; font-size: 9px; padding: 1px 6px; }
+.sd-identity .pill.archived { margin-left: 0; }
+.sd-identity-note { white-space: nowrap; }
+.sd-overview {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border); background: #faf9f5;
+}
+.sd-stat {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  padding: 15px 22px 17px; border-right: 1px solid var(--border);
+}
+.sd-stat:last-child { border-right: 0; }
+.sd-stat strong {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-strong); font-family: var(--mono); font-size: 16px; line-height: 1.25; text-align: left;
+}
+.sd-stat strong .heat { font-size: 12px; vertical-align: 1px; }
+.sd-stat strong.sd-cache-value .heat {
+  padding: 2px 8px; border-radius: 7px; font-size: 16px; line-height: 1.25;
+}
+.sd-created-value { font-size: 16px !important; letter-spacing: -.35px; }
+.sd-token-model-label {
+  margin-top: 7px; color: var(--muted-2); font-size: 9px; font-weight: 700;
+  letter-spacing: .7px; text-transform: uppercase;
+}
+.sd-token-model {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  color: var(--text); font-size: 10.5px; font-weight: 650; white-space: nowrap;
+}
+.sd-stat-note { color: var(--muted-2); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-content {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr);
+  gap: 0 28px; padding: 20px 24px 24px; font-family: var(--sans);
+}
+.sd-section { min-width: 0; }
+.sd-section-paths { grid-column: 1 / -1; padding-top: 15px; margin-top: 15px; }
+.sd-section-title { margin-bottom: 10px; color: var(--muted); }
+.sd-fields {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px;
+}
+.sd-section-session .sd-fields { grid-template-columns: 1fr; }
+.sd-field {
+  display: grid; grid-template-columns: minmax(86px, auto) minmax(0, 1fr) auto;
+  align-items: baseline; gap: 9px; min-width: 0;
+}
+.sd-field-wide { grid-column: 1 / -1; }
+.sd-field .k { color: var(--muted-2); font-size: 10.5px; white-space: nowrap; text-align: left; }
+.sd-field .v { min-width: 0; overflow-wrap: anywhere; color: var(--text); text-align: left; }
+.sd-field .v.mono { font-family: var(--mono); font-size: 11px; }
+.sd-field-time .v { white-space: nowrap; overflow-wrap: normal; }
+.sd-section-paths .sd-field .v { overflow-wrap: anywhere; white-space: normal; }
+.sd-section-usage .sd-tokens { padding-top: 1px; }
+/* Copy micro-button. */
+.copy-btn {
+  flex: none; width: 22px; height: 22px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: 6px;
+  background: transparent; color: var(--muted-2); font-size: 11px;
+  cursor: pointer; transition: all .12s; font-family: var(--sans);
+}
+.copy-btn:hover { color: var(--text-strong); border-color: var(--text-strong); }
+.copy-btn.copied { color: var(--green); border-color: var(--green); }
+/* Token breakdown: numbers first, with a small color key for scanning. */
+.sd-tokens { min-width: 0; padding-top: 2px; }
+.sd-tok-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 16px;
+}
+.sd-tok-item {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline;
+  gap: 7px; min-width: 0;
+}
+.sd-tok-item i { width: 8px; height: 8px; border-radius: 2px; align-self: center; }
+.sd-tok-item .lbl {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 10.5px;
+}
+.sd-tok-item .cnt { color: var(--text-strong); font-family: var(--mono); font-weight: 650; text-align: right; }
+
+.sess-empty { text-align: center; padding: 22px 0; }
+
+.sess-pager {
+  display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted);
+}
+.sess-pager button {
+  padding: 3px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); cursor: pointer; font-size: 12px;
+}
+.sess-pager button:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-strong); }
+.sess-pager button:disabled { opacity: .4; cursor: default; }
+.sess-pager select {
+  padding: 3px 6px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); font-size: 12px; outline: none;
+}
+.loading-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--border-strong); transition: background .2s;
+}
+.loading-dot.on { background: var(--accent); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+@media (max-width: 720px) {
+  .sess-table { min-width: 760px; }
+  .sess-table .sess-col-time { width: 132px; }
+  .sess-table .sess-col-model { width: 150px; }
+  .sess-table .sess-col-cwd { width: 150px; }
+  .sess-table .sess-col-tokens { width: 76px; }
+  .sess-table .sess-col-cache { width: 72px; }
+  .sess-table th, .sess-table td { padding-left: 9px; padding-right: 9px; }
+}
+
+@media (max-width: 820px) {
+  .sd-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sd-content { grid-template-columns: 1fr; gap: 15px; }
+  .sd-section-usage { padding-top: 0; }
+}
+
+@media (max-width: 560px) {
+  .sess-modal-dialog .modal-head { padding: 40px 48px 15px 14px; }
+  .sd-overview { grid-template-columns: 1fr 1fr; }
+  .sd-stat { padding: 12px 13px; }
+  .sd-content { padding: 14px 13px; }
+  .sd-fields { grid-template-columns: 1fr; }
+  .sd-field-wide { grid-column: auto; }
+  .sd-tok-grid { grid-template-columns: 1fr; }
+}

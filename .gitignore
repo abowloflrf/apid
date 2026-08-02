@@ -41,9 +41,7 @@ __pycache__/
 .vscode/
 .DS_Store
 
-# webui 前端工程（node_modules；构建产物进 server/webui/dist，
-# 保留占位 index.html 保证未构建时 go build 仍可编译）
+# webui 前端工程（node_modules；构建产物进 server/webui/dist，必须先 build 前端再 go build）
 node_modules/
 *.tsbuildinfo
-server/webui/dist/*
-!server/webui/dist/index.html
+server/webui/dist/

@@ -18,6 +18,9 @@ services:
     # Host network: APID_LISTEN port (default :19092) is exposed directly on the host.
     network_mode: host
     environment:
+      # Keep agent absolute paths identical to the host paths recorded in
+      # session databases (for example /home/user/.codex/...).
+      HOME: "${HOME}"
       TZ: Asia/Shanghai
       # Listen address; with host networking this binds straight to the host.
       APID_LISTEN: ":19092"
@@ -30,3 +33,9 @@ services:
       - ./config.toml:/app/config.toml:ro
       # Persist the metrics DB across container restarts.
       - ./data:/app/data
+      # Agent transcript stores, ALL mounted read-only (:ro): the sessions
+      # dashboard only reads them, never writes.
+      - ~/.codex:${HOME}/.codex:ro
+      - ~/.claude:${HOME}/.claude:ro
+      - ~/.pi/agent:${HOME}/.pi/agent:ro
+      - ~/.local/share/opencode:${HOME}/.local/share/opencode:ro

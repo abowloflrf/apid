@@ -148,3 +148,52 @@ export interface LiveSnapshot {
   now: number;
   requests: LiveRequest[];
 }
+
+// ---- agent sessions ----
+
+export interface AgentSession {
+  id: string;
+  title: string;
+  created_at_ms: number;
+  updated_at_ms: number;
+  cwd: string;
+  model: string;
+  reasoning_effort: string;
+  tokens_used: number;
+  archived: boolean;
+  cli_version: string;
+  rollout_path: string;
+  tool: string; // codex | claude | pi | opencode
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cache_hit_rate: number | null; // 0..1
+}
+
+export interface SessionsSummary {
+  sessions: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cache_pct: number | null; // 0..1
+}
+
+export interface SessionsSource {
+  tool: string;
+  label: string;
+  desc: string;
+}
+
+export interface SessionsResponse {
+  sources: SessionsSource[];
+  total: number;
+  limit: number;
+  offset: number;
+  with_tokens: boolean;
+  sessions: AgentSession[];
+  summary: SessionsSummary;
+  generated_ms: number;
+}

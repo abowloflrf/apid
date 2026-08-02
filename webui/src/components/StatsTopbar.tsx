@@ -72,6 +72,7 @@ export function StatsTopbar({ view, onView, q, liveCount, onRefresh }: Props) {
             live<span className="tab-badge" hidden={!liveCount}>{liveCount}</span>
           </button>
           <button className={view === "routes" ? "active" : ""} onClick={() => onView("routes")}>routes</button>
+          <button className={view === "sessions" ? "active" : ""} onClick={() => onView("sessions")}>sessions</button>
         </div>
         <div className="ranges" id="rangePresets">
           {RANGES.map(([val, label]) => (

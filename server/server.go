@@ -19,6 +19,7 @@ import (
 	"github.com/abowloflrf/apid/protocol"
 	"github.com/abowloflrf/apid/reasoning"
 	"github.com/abowloflrf/apid/search"
+	"github.com/abowloflrf/apid/session"
 	"github.com/abowloflrf/apid/stats"
 	"github.com/abowloflrf/apid/store"
 	"github.com/abowloflrf/apid/trace"
@@ -68,6 +69,7 @@ type Server struct {
 	search          *search.Handler  // nil when [search] is not configured
 	searchPathField string           // mount path for search endpoint; "" = not configured
 	live            *liveRegistry    // in-flight requests, for GET /stats/active
+	sessions        *session.Loader  // agent session listing, for GET /stats/sessions
 }
 
 // New builds a Server. st may be nil (stats disabled); a nil logger falls back
@@ -110,6 +112,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		search:          newSearchHandler(cfg.Search, logger),
 		searchPathField: searchPathFromConfig(cfg.Search),
 		live:            newLiveRegistry(),
+		sessions:        session.NewLoader(),
 	}
 }
 
@@ -197,6 +200,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /stats/topology", s.handleTopology)
 	// Live in-flight requests: in-memory registry, also storage-independent.
 	mux.HandleFunc("GET /stats/active", s.handleStatsActive)
+	// Local agent sessions (Codex/Claude/pi/OpenCode): reads the transcripts on
+	// this machine read-only, also storage-independent.
+	mux.HandleFunc("GET /stats/sessions", s.handleSessions)
 	mux.Handle("GET /stats/", s.statsUIHandler())
 	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, _ *http.Request) {
 		// Relative redirect so it still lands on /stats/ when apid is mounted
