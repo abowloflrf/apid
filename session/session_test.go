@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseISO(t *testing.T) {
@@ -15,7 +16,7 @@ func TestParseISO(t *testing.T) {
 		{"2026-05-01T10:00:00Z", 1777629600000},
 		{"2026-05-01T10:00:00.901Z", 1777629600901},
 		{"2026-05-01T10:00:00+08:00", 1777600800000},
-		{"2026-05-01", 1777564800000}, // date-only, local midnight
+		{"2026-05-01", time.Date(2026, 5, 1, 0, 0, 0, 0, time.Local).UnixMilli()}, // date-only, local midnight
 		{"garbage", 0},
 	}
 	for _, c := range cases {
