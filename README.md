@@ -40,6 +40,49 @@ To protect the gateway itself, set a top-level `client_api_key` in
 upstream credential remains `[[upstream]].api_key` (Anthropic uses `X-Api-Key`).
 Only forwarding routes require it; `/healthz` stays open.
 
+## Experimental Codex subscription proxy
+
+`auth_mode = "codex_subscription"` lets a Codex client that is already signed
+in with ChatGPT send its OpenAI Bearer credential through apid to the fixed
+`https://chatgpt.com/backend-api/codex` backend. This is credential passthrough,
+not subscription verification: apid does not parse the token or determine
+whether the account is Plus/Pro. The upstream remains responsible for access.
+
+The mode supports only `POST /responses` and `POST /responses/compact`; it does
+not implement `/models`. The upstream URL, protocol, model passthrough and route
+shape are validated at startup. Subscription routes also disable environment
+proxies, redirects, request replay, TRACE bodies and query persistence. Because
+the local process can see the Bearer credential, apid requires an IP-literal
+loopback listener such as `APID_LISTEN=127.0.0.1:19092`.
+The subscription SSE idle timeout defaults to five minutes and can be changed
+with `APID_CODEX_SSE_IDLE_TIMEOUT` using a Go duration such as `10m`.
+
+The complete apid-side example is commented in `config.example.toml`. Codex can
+point a custom Responses provider at it:
+
+```toml
+model_provider = "apid-codex-subscription"
+
+[model_providers.apid-codex-subscription]
+name = "OpenAI"
+base_url = "http://127.0.0.1:19092/codex/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = 300000
+
+# Only when apid's client_api_key is enabled:
+env_http_headers = { "X-Apid-Key" = "APID_CODEX_PROXY_KEY" }
+```
+
+Run Codex's ChatGPT login flow before selecting this provider. Compatibility
+with the private ChatGPT Codex endpoints can change across Codex versions, so
+verify inference, tool calls and context compaction after upgrades. See
+[`docs/CODEX_SUBSCRIPTION_PROXY_DESIGN.md`](docs/CODEX_SUBSCRIPTION_PROXY_DESIGN.md)
+for the threat model and compatibility limits.
+
 The read-only dashboard and its JSON API (`GET /stats` and `/stats/*`) are
 guarded independently by a top-level `stats_api_key`. When set, the same three
 header styles are accepted. Leave it empty to keep stats open (Grafana can send

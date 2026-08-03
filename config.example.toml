@@ -19,6 +19,8 @@
 # Optional inbound client auth for apid itself. Empty/omitted = disabled.
 # When set, clients must present this key as Authorization: Bearer <key>,
 # X-Api-Key: <key>, or Api-Key: <key>. This key is never forwarded upstream.
+# Codex subscription routes are the exception: they accept the local key only
+# as X-Apid-Key because Authorization carries the client's OpenAI credential.
 # Only forwarding routes require it; /healthz and /stats(/*) stay open.
 # client_api_key = "apid-local-static-key"
 
@@ -53,6 +55,35 @@ protocol = "anthropic_messages"
 base_url = "https://api.anthropic.com"
 path = "/v1/messages"
 api_key = "sk-ant-xxx"   # sent as X-Api-Key for anthropic_messages
+
+# ── Experimental Codex subscription proxy (optional) ────────────────────────
+# This mode passes the Codex client's OpenAI Bearer credential only to the
+# code-fixed ChatGPT Codex backend. It requires APID_LISTEN to be an IP-literal
+# loopback address, for example APID_LISTEN=127.0.0.1:19092.
+#
+# [[upstream]]
+# name = "openai-codex-subscription"
+# protocol = "openai_responses"
+# base_url = "https://chatgpt.com/backend-api/codex"
+# path = "/responses"
+# auth_mode = "codex_subscription"
+#
+# [[route]]
+# path = "/codex/v1/responses"
+# input_protocol = "openai_responses"
+#   [[route.model]]
+#   match = "*"
+#   upstream = "openai-codex-subscription"
+#   model = ""
+#
+# [[route]]
+# path = "/codex/v1/responses/compact"
+# input_protocol = "openai_responses"
+# operation = "responses_compact"
+#   [[route.model]]
+#   match = "*"
+#   upstream = "openai-codex-subscription"
+#   model = ""
 
 # ── Responses entrypoint: clients speak Responses API, dispatched by model. ──
 [[route]]

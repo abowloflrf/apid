@@ -102,12 +102,15 @@ export interface UpstreamInfo {
   model: string;
   auth: string;
   auth_header: string;
+  auth_mode: string;
+  experimental: boolean;
   ref_count: number;
 }
 
 export interface RouteInfo {
   path: string;
   input_protocol: string;
+  operation: string;
   rules: RuleInfo[];
 }
 
@@ -134,6 +137,7 @@ export interface LiveRequest {
   upstream_protocol: string;
   mode: string;
   stream: boolean;
+  stream_state?: "unknown" | "sync" | "sse";
   ttft_ms?: number | null;
   start: number;
   path?: string;

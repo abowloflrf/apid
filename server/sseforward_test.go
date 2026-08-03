@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -248,5 +249,26 @@ func TestForwardSSE_UpstreamReadErrorNotClientGone(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read upstream") {
 		t.Errorf("error should mention read upstream, got: %v", err)
+	}
+}
+
+func TestForwardSSERejectsOversizedLine(t *testing.T) {
+	line := "data: " + strings.Repeat("x", maxSSELineSize) + "\n"
+	_, _, err := forwardSSE(context.Background(), okSink{}, strings.NewReader(line), config.ProtoResponses, nil)
+	if !errors.Is(err, errSSELineTooLarge) {
+		t.Fatalf("error = %v, want errSSELineTooLarge", err)
+	}
+}
+
+func TestIdleTimeoutReader(t *testing.T) {
+	reader, writer := io.Pipe()
+	t.Cleanup(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+	idle := &idleTimeoutReader{ctx: context.Background(), src: reader, timeout: 10 * time.Millisecond}
+	_, err := idle.Read(make([]byte, 16))
+	if !errors.Is(err, errSSEIdleTimeout) {
+		t.Fatalf("error = %v, want errSSEIdleTimeout", err)
 	}
 }

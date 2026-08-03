@@ -15,6 +15,12 @@ import (
 	"github.com/abowloflrf/apid/stats"
 )
 
+const (
+	maxSSELineSize                    = 1 * 1024 * 1024
+	defaultSubscriptionSSEIdleTimeout = 300 * time.Second
+	sseReadBufferSize                 = 64 * 1024
+)
+
 // forwardSSE streams upstream SSE to the client verbatim, tee-parsing usage and
 // the first-token time. Parsing failures are swallowed (never affect forwarding),
 // but a non-EOF read error or a client write error is returned so stats can flag
@@ -27,13 +33,15 @@ var (
 	errClientGone = errors.New("client gone")
 	// errClientAborted: stream aborted by client before completion. Recorded as
 	// an error, but the message distinguishes it from an upstream fault.
-	errClientAborted = errors.New("client aborted")
+	errClientAborted   = errors.New("client aborted")
+	errSSELineTooLarge = errors.New("SSE line exceeds size limit")
+	errSSEIdleTimeout  = errors.New("SSE upstream idle timeout")
 )
 
 // observe, when non-nil, sees every forwarded line; the live registry uses it
 // to keep in-flight token counters current.
 func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Protocol, observe func([]byte)) (*stats.Usage, time.Time, error) {
-	reader := bufio.NewReader(src)
+	reader := bufio.NewReaderSize(src, sseReadBufferSize)
 	var usage *stats.Usage
 	var firstTokenAt time.Time
 	var completed bool
@@ -43,7 +51,7 @@ func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Pr
 		if err := ctx.Err(); err != nil {
 			return usage, firstTokenAt, clientGoneErr(completed)
 		}
-		line, readErr := reader.ReadBytes('\n')
+		line, readErr := readSSELine(reader, maxSSELineSize)
 		if len(line) > 0 {
 			if _, werr := dst.Write(line); werr != nil {
 				// Client gone: not an upstream fault.
@@ -64,6 +72,51 @@ func forwardSSE(ctx context.Context, dst sseSink, src io.Reader, proto config.Pr
 			}
 			return usage, firstTokenAt, fmt.Errorf("read upstream: %w", readErr)
 		}
+	}
+}
+
+func readSSELine(reader *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(line)+len(part) > max {
+			return nil, errSSELineTooLarge
+		}
+		line = append(line, part...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+type idleReadResult struct {
+	data []byte
+	err  error
+}
+
+type idleTimeoutReader struct {
+	ctx     context.Context
+	src     io.Reader
+	timeout time.Duration
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	result := make(chan idleReadResult, 1)
+	buf := make([]byte, len(p))
+	go func() {
+		n, err := r.src.Read(buf)
+		result <- idleReadResult{data: buf[:n], err: err}
+	}()
+	timer := time.NewTimer(r.timeout)
+	defer timer.Stop()
+	select {
+	case got := <-result:
+		return copy(p, got.data), got.err
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	case <-timer.C:
+		return 0, errSSEIdleTimeout
 	}
 }
 

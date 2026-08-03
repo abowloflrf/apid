@@ -1,8 +1,10 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,12 @@ import (
 
 	"github.com/abowloflrf/apid/protocol"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
 
 // TestForwardHeaderPassthrough asserts business headers reach the upstream while
 // auth, transport, and CDN/tracing headers are stripped, and that the configured
@@ -226,5 +234,123 @@ func TestForwardResponsesEndpoint(t *testing.T) {
 	plain := New(srv.URL, "/v1/chat/completions", "")
 	if _, err := plain.ForwardResponsesWithQuery(context.Background(), []byte(`{}`), http.Header{}, ""); err == nil {
 		t.Fatal("ForwardResponsesWithQuery on a client without responses endpoint should error")
+	}
+}
+
+func TestForwardCodexSubscriptionFixedTargetAndHeaders(t *testing.T) {
+	body := []byte{0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x02, 0x03}
+	var gotURL string
+	var gotHeader http.Header
+	var gotBody []byte
+	calls := 0
+	rt := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		gotURL = r.URL.String()
+		gotHeader = r.Header.Clone()
+		gotBody, _ = io.ReadAll(r.Body)
+		if r.GetBody != nil {
+			t.Error("GetBody is set, want non-replayable POST")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{}`))),
+		}, nil
+	})
+	c := NewCodexSubscription(WithCodexSubscriptionRoundTripper(rt))
+
+	h := http.Header{}
+	h.Set("Authorization", "Bearer chatgpt-token")
+	h.Set("X-Apid-Key", "local-secret")
+	h.Set("X-Api-Key", "other-secret")
+	h.Set("Cookie", "session=local")
+	h.Set("X-Forwarded-For", "192.0.2.1")
+	h.Set("ChatGPT-Account-Id", "account-id")
+	h.Set("OpenAI-Beta", "responses=experimental")
+	h.Set("Content-Type", "application/octet-stream")
+	h.Set("Content-Encoding", "zstd")
+
+	resp, err := c.ForwardCodexSubscription(context.Background(), body, h,
+		`access_token=do-not-log&next=https%3A%2F%2Fevil.example`, true)
+	if err != nil {
+		t.Fatalf("ForwardCodexSubscription: %v", err)
+	}
+	resp.Body.Close()
+
+	wantURL := "https://chatgpt.com/backend-api/codex/responses/compact?access_token=do-not-log&next=https%3A%2F%2Fevil.example"
+	if gotURL != wantURL {
+		t.Errorf("URL = %q, want %q", gotURL, wantURL)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1", calls)
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Errorf("body changed: got %x want %x", gotBody, body)
+	}
+	for k, want := range map[string]string{
+		"Authorization":      "Bearer chatgpt-token",
+		"ChatGPT-Account-Id": "account-id",
+		"OpenAI-Beta":        "responses=experimental",
+		"Content-Type":       "application/octet-stream",
+		"Content-Encoding":   "zstd",
+	} {
+		if got := gotHeader.Get(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	for _, k := range []string{"X-Apid-Key", "X-Api-Key", "Cookie", "X-Forwarded-For"} {
+		if got := gotHeader.Get(k); got != "" {
+			t.Errorf("%s leaked: %q", k, got)
+		}
+	}
+}
+
+func TestForwardCodexSubscriptionBearerValidation(t *testing.T) {
+	called := false
+	c := NewCodexSubscription(WithCodexSubscriptionRoundTripper(roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected call")
+	})))
+
+	cases := map[string]http.Header{
+		"missing":        {},
+		"empty":          {"Authorization": []string{"Bearer "}},
+		"wrong scheme":   {"Authorization": []string{"Basic token"}},
+		"duplicate":      {"Authorization": []string{"Bearer one", "Bearer two"}},
+		"comma combined": {"Authorization": []string{"Bearer one, Bearer two"}},
+	}
+	for name, h := range cases {
+		t.Run(name, func(t *testing.T) {
+			called = false
+			if _, err := c.ForwardCodexSubscription(context.Background(), []byte(`{}`), h, "", false); err == nil {
+				t.Fatal("expected Bearer validation error")
+			}
+			if called {
+				t.Fatal("transport called after invalid Authorization")
+			}
+		})
+	}
+}
+
+func TestCodexSubscriptionTransportSafety(t *testing.T) {
+	c := NewCodexSubscription()
+	transport, ok := c.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T", c.http.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("subscription transport uses an environment proxy")
+	}
+	if c.http.CheckRedirect == nil {
+		t.Fatal("CheckRedirect is nil")
+	}
+	if err := c.http.CheckRedirect(&http.Request{}, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("CheckRedirect error = %v", err)
+	}
+	if c.Endpoint() != "https://chatgpt.com/backend-api/codex/responses" {
+		t.Fatalf("Endpoint = %q", c.Endpoint())
+	}
+	if c.CompactEndpoint() != "https://chatgpt.com/backend-api/codex/responses/compact" {
+		t.Fatalf("CompactEndpoint = %q", c.CompactEndpoint())
 	}
 }

@@ -15,6 +15,7 @@ const AUTH_LABEL: Record<string, string> = {
   api_key: "own api_key",
   passthrough: "client credentials",
   stripped: "none — client key is stripped",
+  codex_subscription: "client OpenAI credential",
 };
 
 function Chip({ label, value, on }: { label: string; value: string; on: boolean }) {
@@ -112,6 +113,7 @@ function UpstreamCard({ u, onHover }: { u: UpstreamInfo; onHover: (sel: { up: st
         <span className="name">{u.name}</span>
         <span className="pill proto" title={u.protocol}>{protoShort(u.protocol)}</span>
         {dualPill}
+        {u.experimental ? <span className="pill dual" title="experimental credential passthrough to the fixed ChatGPT Codex backend">experimental</span> : null}
       </div>
       <div className="tc-endpoint" title={u.endpoint}>{u.endpoint}</div>
       {u.supports_responses ? (

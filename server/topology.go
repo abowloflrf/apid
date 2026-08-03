@@ -44,12 +44,15 @@ type upstreamInfo struct {
 	Model             string `json:"model"`                        // upstream-level rewrite; "" = pass through
 	Auth              string `json:"auth"`                         // api_key | passthrough | stripped
 	AuthHdr           string `json:"auth_header"`                  // header the key is sent in; "" when no key
-	RefCount          int    `json:"ref_count"`                    // model rules pointing here
+	AuthMode          string `json:"auth_mode"`
+	Experimental      bool   `json:"experimental"`
+	RefCount          int    `json:"ref_count"` // model rules pointing here
 }
 
 type routeInfo struct {
 	Path          string     `json:"path"`
 	InputProtocol string     `json:"input_protocol"`
+	Operation     string     `json:"operation"`
 	Rules         []ruleInfo `json:"rules"`
 }
 
@@ -89,7 +92,7 @@ func (s *Server) topology() topologyResponse {
 		}
 		protoRoutes[string(rt.InputProtocol)]++
 
-		ri := routeInfo{Path: rt.Path, InputProtocol: string(rt.InputProtocol), Rules: make([]ruleInfo, 0, len(rt.Models))}
+		ri := routeInfo{Path: rt.Path, InputProtocol: string(rt.InputProtocol), Operation: string(rt.Operation), Rules: make([]ruleInfo, 0, len(rt.Models))}
 		for _, m := range rt.Models {
 			refs[m.Upstream]++
 			r := ruleInfo{Match: m.Match, MatchKind: matchKind(m.Match), Upstream: m.Upstream}
@@ -102,6 +105,9 @@ func (s *Server) topology() topologyResponse {
 			r.UpstreamProto = string(tg.cfg.Protocol)
 			r.Endpoint = tg.client.Endpoint()
 			r.Mode = "forward"
+			if tg.cfg.AuthMode == config.AuthModeCodexSubscription && rt.Operation == config.RouteOperationResponsesCompact {
+				r.Endpoint = tg.client.CompactEndpoint()
+			}
 			if rt.InputProtocol != tg.cfg.Protocol {
 				if rt.InputProtocol == config.ProtoResponses && tg.cfg.SupportsResponses {
 					// Dual-protocol backend: no conversion, raw bytes to /v1/responses.
@@ -121,13 +127,15 @@ func (s *Server) topology() topologyResponse {
 	upstreams := make([]upstreamInfo, 0, len(s.cfg.Upstreams))
 	for _, u := range s.cfg.Upstreams {
 		ui := upstreamInfo{
-			Name:     u.Name,
-			Protocol: string(u.Protocol),
-			BaseURL:  u.BaseURL,
-			Path:     u.Path,
-			Model:    u.Model,
-			Auth:     upstreamAuthMode(u, s.apiKey != ""),
-			RefCount: refs[u.Name],
+			Name:         u.Name,
+			Protocol:     string(u.Protocol),
+			BaseURL:      u.BaseURL,
+			Path:         u.Path,
+			Model:        u.Model,
+			Auth:         upstreamAuthMode(u, s.apiKey != ""),
+			AuthMode:     string(u.AuthMode),
+			Experimental: u.AuthMode == config.AuthModeCodexSubscription,
+			RefCount:     refs[u.Name],
 		}
 		if tg, ok := s.upstreams[u.Name]; ok {
 			ui.Endpoint = tg.client.Endpoint()
@@ -136,7 +144,9 @@ func (s *Server) topology() topologyResponse {
 				ui.ResponsesEndpoint = tg.client.ResponsesEndpoint()
 			}
 		}
-		if u.APIKey != "" {
+		if u.AuthMode == config.AuthModeCodexSubscription {
+			ui.AuthHdr = "Authorization: Bearer (client credential)"
+		} else if u.APIKey != "" {
 			ui.AuthHdr = "Authorization: Bearer"
 			if u.Protocol == config.ProtoAnthropic {
 				ui.AuthHdr = "X-Api-Key"
@@ -202,6 +212,8 @@ func modelPlan(m config.ModelRule, u config.Upstream) (source, model string) {
 // forwarding (see upstreamClientHeaders).
 func upstreamAuthMode(u config.Upstream, clientAuth bool) string {
 	switch {
+	case u.AuthMode == config.AuthModeCodexSubscription:
+		return string(config.AuthModeCodexSubscription)
 	case u.APIKey != "":
 		return "api_key"
 	case clientAuth:

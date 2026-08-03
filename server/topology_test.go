@@ -162,3 +162,22 @@ func TestTopologyWorksWithoutStorage(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestTopologyCodexSubscription(t *testing.T) {
+	cfg := subscriptionConfig("local-key", "")
+	top := New(cfg, &store.Store{}, nil).topology()
+	u := top.Upstreams[0]
+	if u.AuthMode != string(config.AuthModeCodexSubscription) ||
+		u.Auth != string(config.AuthModeCodexSubscription) || !u.Experimental {
+		t.Fatalf("subscription upstream = %+v", u)
+	}
+	if u.Endpoint != "https://chatgpt.com/backend-api/codex/responses" ||
+		u.AuthHdr != "Authorization: Bearer (client credential)" {
+		t.Fatalf("subscription endpoint/auth = %+v", u)
+	}
+	compact := top.Routes[1]
+	if compact.Operation != string(config.RouteOperationResponsesCompact) ||
+		compact.Rules[0].Endpoint != "https://chatgpt.com/backend-api/codex/responses/compact" {
+		t.Fatalf("compact route = %+v", compact)
+	}
+}

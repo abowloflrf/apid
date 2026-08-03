@@ -8,8 +8,11 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/joho/godotenv"
@@ -24,15 +27,38 @@ const (
 	ProtoAnthropic Protocol = "anthropic_messages"
 )
 
+// AuthMode selects the credential policy for one upstream. The zero value
+// keeps the existing API-key behavior.
+type AuthMode string
+
+const (
+	AuthModeDefault           AuthMode = ""
+	AuthModeCodexSubscription AuthMode = "codex_subscription"
+)
+
+// RouteOperation selects one of the narrowly supported Responses operations.
+type RouteOperation string
+
+const (
+	RouteOperationInference        RouteOperation = ""
+	RouteOperationResponsesCompact RouteOperation = "responses_compact"
+)
+
+const (
+	CodexSubscriptionBaseURL = "https://chatgpt.com/backend-api/codex"
+	CodexSubscriptionPath    = "/responses"
+)
+
 type Config struct {
-	Listen       string       // APID_LISTEN
-	TraceDir     string       // APID_TRACE_DIR / APID_TRACE; empty = off
-	DB           string       // APID_DB; empty = off
-	ClientAPIKey string       // client_api_key in TOML; empty = no inbound client auth
-	StatsAPIKey  string       // stats_api_key in TOML; empty = /stats(*) dashboard stays open
-	Search       SearchConfig // optional; zero value = search endpoint disabled
-	Upstreams    []Upstream
-	Routes       []Route
+	Listen              string        // APID_LISTEN
+	TraceDir            string        // APID_TRACE_DIR / APID_TRACE; empty = off
+	DB                  string        // APID_DB; empty = off
+	ClientAPIKey        string        // client_api_key in TOML; empty = no inbound client auth
+	StatsAPIKey         string        // stats_api_key in TOML; empty = /stats(*) dashboard stays open
+	CodexSSEIdleTimeout time.Duration // APID_CODEX_SSE_IDLE_TIMEOUT; defaults to 5m
+	Search              SearchConfig  // optional; zero value = search endpoint disabled
+	Upstreams           []Upstream
+	Routes              []Route
 }
 
 // Upstream is a backend deployment, referenced by Name from any number of routes
@@ -46,6 +72,7 @@ type Upstream struct {
 	Model             string   `toml:"model"`              // empty = pass through client model
 	SupportsResponses bool     `toml:"supports_responses"` // backend also speaks OpenAI Responses natively
 	ResponsesPath     string   `toml:"responses_path"`     // optional; empty = derived from Path
+	AuthMode          AuthMode `toml:"auth_mode"`          // empty = normal API key; codex_subscription = fixed credential passthrough
 }
 
 // EffectiveResponsesPath returns the OpenAI Responses endpoint path actually
@@ -76,9 +103,10 @@ type ModelRule struct {
 // Whether conversion happens depends on InputProtocol vs the matched upstream's
 // Protocol.
 type Route struct {
-	Path          string      `toml:"path"`
-	InputProtocol Protocol    `toml:"input_protocol"`
-	Models        []ModelRule `toml:"model"`
+	Path          string         `toml:"path"`
+	InputProtocol Protocol       `toml:"input_protocol"`
+	Operation     RouteOperation `toml:"operation"`
+	Models        []ModelRule    `toml:"model"`
 }
 
 // SearchConfig configures the optional standalone web-search endpoint
@@ -170,17 +198,26 @@ func Load(configPath string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	codexSSEIdleTimeout, err := durationEnv("APID_CODEX_SSE_IDLE_TIMEOUT", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
-	return Config{
-		Listen:       env("APID_LISTEN", ":19092"),
-		TraceDir:     traceDir,
-		DB:           env("APID_DB", ""),
-		ClientAPIKey: fc.ClientAPIKey,
-		StatsAPIKey:  fc.StatsAPIKey,
-		Search:       fc.Search,
-		Upstreams:    fc.Upstreams,
-		Routes:       fc.Routes,
-	}, nil
+	cfg := Config{
+		Listen:              env("APID_LISTEN", ":19092"),
+		TraceDir:            traceDir,
+		DB:                  env("APID_DB", ""),
+		ClientAPIKey:        fc.ClientAPIKey,
+		StatsAPIKey:         fc.StatsAPIKey,
+		CodexSSEIdleTimeout: codexSSEIdleTimeout,
+		Search:              fc.Search,
+		Upstreams:           fc.Upstreams,
+		Routes:              fc.Routes,
+	}
+	if err := validateRuntimeConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
 }
 
 func loadFile(path string) ([]Upstream, []Route, error) {
@@ -228,6 +265,9 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		if !isValidProtocol(u.Protocol) {
 			return fmt.Errorf("config: upstream %q has invalid protocol %q", u.Name, u.Protocol)
 		}
+		if !isValidAuthMode(u.AuthMode) {
+			return fmt.Errorf("config: upstream %q has invalid auth_mode %q", u.Name, u.AuthMode)
+		}
 		if u.BaseURL == "" {
 			return fmt.Errorf("config: upstream %q base_url must not be empty", u.Name)
 		}
@@ -245,6 +285,11 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		}
 		if u.ResponsesPath != "" && !strings.HasPrefix(u.ResponsesPath, "/") {
 			return fmt.Errorf("config: upstream %q responses_path %q must start with /", u.Name, u.ResponsesPath)
+		}
+		if u.AuthMode == AuthModeCodexSubscription {
+			if err := validateCodexSubscriptionUpstream(u); err != nil {
+				return err
+			}
 		}
 		byName[u.Name] = u
 	}
@@ -269,12 +314,19 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		if !isValidProtocol(r.InputProtocol) {
 			return fmt.Errorf("config: route %q has invalid input_protocol %q", r.Path, r.InputProtocol)
 		}
+		if !isValidRouteOperation(r.Operation) {
+			return fmt.Errorf("config: route %q has invalid operation %q", r.Path, r.Operation)
+		}
+		if r.Operation == RouteOperationResponsesCompact && r.InputProtocol != ProtoResponses {
+			return fmt.Errorf("config: route %q operation %q requires input_protocol %q", r.Path, r.Operation, ProtoResponses)
+		}
 		if len(r.Models) == 0 {
 			return fmt.Errorf("config: route %q needs at least one [[route.model]]", r.Path)
 		}
 
 		seenExact := make(map[string]bool, len(r.Models))
 		catchall := 0
+		subscriptionRules := 0
 		for _, m := range r.Models {
 			if m.Upstream == "" {
 				return fmt.Errorf("config: route %q has a model rule with no upstream", r.Path)
@@ -282,6 +334,15 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 			u, ok := byName[m.Upstream]
 			if !ok {
 				return fmt.Errorf("config: route %q references undefined upstream %q", r.Path, m.Upstream)
+			}
+			if u.AuthMode == AuthModeCodexSubscription {
+				subscriptionRules++
+				if r.InputProtocol != ProtoResponses {
+					return fmt.Errorf("config: route %q via subscription upstream %q requires input_protocol %q", r.Path, u.Name, ProtoResponses)
+				}
+				if m.Model == nil || *m.Model != "" {
+					return fmt.Errorf("config: route %q via subscription upstream %q requires model = \"\"", r.Path, u.Name)
+				}
 			}
 			// Only responses -> chat conversion is implemented. All other
 			// cross-protocol pairs, including Anthropic, are rejected at load.
@@ -302,6 +363,63 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		if catchall > 1 {
 			return fmt.Errorf("config: route %q has multiple catch-all matches", r.Path)
 		}
+		if subscriptionRules > 0 {
+			if subscriptionRules != len(r.Models) {
+				return fmt.Errorf("config: route %q must not mix codex_subscription and normal upstreams", r.Path)
+			}
+			if len(r.Models) != 1 || r.Models[0].Match != "*" {
+				return fmt.Errorf("config: route %q using codex_subscription requires exactly one match = \"*\" rule", r.Path)
+			}
+		} else if r.Operation == RouteOperationResponsesCompact {
+			return fmt.Errorf("config: route %q operation %q requires a codex_subscription upstream", r.Path, r.Operation)
+		}
+	}
+	return nil
+}
+
+func validateCodexSubscriptionUpstream(u Upstream) error {
+	if u.Protocol != ProtoResponses {
+		return fmt.Errorf("config: subscription upstream %q protocol must be %q", u.Name, ProtoResponses)
+	}
+	if u.BaseURL != CodexSubscriptionBaseURL {
+		return fmt.Errorf("config: subscription upstream %q base_url must be %q", u.Name, CodexSubscriptionBaseURL)
+	}
+	if u.Path != CodexSubscriptionPath {
+		return fmt.Errorf("config: subscription upstream %q path must be %q", u.Name, CodexSubscriptionPath)
+	}
+	if u.APIKey != "" {
+		return fmt.Errorf("config: subscription upstream %q api_key must be empty", u.Name)
+	}
+	if u.Model != "" {
+		return fmt.Errorf("config: subscription upstream %q model must be empty", u.Name)
+	}
+	if u.SupportsResponses || u.ResponsesPath != "" {
+		return fmt.Errorf("config: subscription upstream %q must not set supports_responses or responses_path", u.Name)
+	}
+	return nil
+}
+
+func validateRuntimeConfig(cfg Config) error {
+	hasSubscription := false
+	for _, u := range cfg.Upstreams {
+		if u.AuthMode == AuthModeCodexSubscription {
+			hasSubscription = true
+			break
+		}
+	}
+	if !hasSubscription {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("config: codex_subscription requires APID_LISTEN to be an IP loopback address with a port, got %q", cfg.Listen)
+	}
+	ip := net.ParseIP(host)
+	portNum, portErr := strconv.Atoi(port)
+	validLoopback := ip != nil && (ip.Equal(net.IPv6loopback) ||
+		(!strings.Contains(host, ":") && ip.To4() != nil && ip.To4()[0] == 127))
+	if !validLoopback || portErr != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("config: codex_subscription requires APID_LISTEN to be an IP loopback address with a port, got %q", cfg.Listen)
 	}
 	return nil
 }
@@ -328,6 +446,14 @@ func isValidProtocol(p Protocol) bool {
 	return p == ProtoResponses || p == ProtoChat || p == ProtoAnthropic
 }
 
+func isValidAuthMode(m AuthMode) bool {
+	return m == AuthModeDefault || m == AuthModeCodexSubscription
+}
+
+func isValidRouteOperation(op RouteOperation) bool {
+	return op == RouteOperationInference || op == RouteOperationResponsesCompact
+}
+
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -342,4 +468,16 @@ func truthy(v string) bool {
 	default:
 		return false
 	}
+}
+
+func durationEnv(key string, def time.Duration) (time.Duration, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("config: %s must be a positive duration, got %q", key, raw)
+	}
+	return d, nil
 }

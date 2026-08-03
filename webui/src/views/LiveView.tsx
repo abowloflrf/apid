@@ -6,6 +6,7 @@ import type { LiveRequest, LiveSnapshot } from "../types";
 const LIVE_POLL_MS = 1000;
 
 function livePhase(r: LiveRequest): "sync" | "waiting" | "streaming" {
+  if (r.stream_state === "unknown") return "waiting";
   if (!r.stream) return "sync";
   return r.ttft_ms == null ? "waiting" : "streaming";
 }
@@ -70,7 +71,9 @@ function LiveCard({ data, now }: { data: CardData; now: number }) {
       <div className="lc-tags">
         <span className="pill proto" title={`${r.client_protocol} → ${r.upstream_protocol}`}>{liveProtoLabel(r)}</span>
         <span className={`mode ${r.mode}`}>{r.mode}</span>
-        {r.stream ? <span className="lc-sse">SSE</span> : <span className="lc-sync">sync</span>}
+        {r.stream_state === "unknown"
+          ? <span className="lc-sync">unknown</span>
+          : r.stream ? <span className="lc-sse">SSE</span> : <span className="lc-sync">sync</span>}
         <span className="lc-up" title="upstream">{r.upstream || ""}</span>
       </div>
       <div className="lc-body">

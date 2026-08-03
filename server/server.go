@@ -32,6 +32,8 @@ import (
 // newTransport).
 const nonStreamTimeout = 300 * time.Second
 
+const subscriptionRequestBodyReadTimeout = 60 * time.Second
+
 // target is a resolved upstream: its config plus a bound forwarding client,
 // shared across every route/model rule that references it.
 type target struct {
@@ -43,7 +45,8 @@ type target struct {
 // paths (raw forward / protocol conversion).
 type exchange struct {
 	target       *target
-	proto        config.Protocol     // protocol actually spoken upstream (wire protocol)
+	proto        config.Protocol // protocol actually spoken upstream (wire protocol)
+	operation    config.RouteOperation
 	viaResponses bool                // raw-forward to the upstream's dedicated Responses endpoint
 	model        string              // effective model override; "" = pass the client model through
 	w            http.ResponseWriter // wraps the client connection; records status for the access log
@@ -56,20 +59,22 @@ type exchange struct {
 }
 
 type Server struct {
-	cfg             config.Config // as loaded, kept for the read-only topology endpoint
-	routes          map[string]config.Route
-	upstreams       map[string]*target
-	log             *slog.Logger
-	tracer          *trace.Tracer
-	recorder        *stats.Recorder
-	db              *sql.DB          // read-only handle for the stats query API; nil when storage is off
-	reasoning       *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
-	apiKey          string           // optional inbound client API key; empty = no client auth
-	statsAPIKey     string           // optional key for the read-only /stats(*) dashboard/API; empty = open
-	search          *search.Handler  // nil when [search] is not configured
-	searchPathField string           // mount path for search endpoint; "" = not configured
-	live            *liveRegistry    // in-flight requests, for GET /stats/active
-	sessions        *session.Loader  // agent session listing, for GET /stats/sessions
+	cfg                        config.Config // as loaded, kept for the read-only topology endpoint
+	routes                     map[string]config.Route
+	upstreams                  map[string]*target
+	log                        *slog.Logger
+	tracer                     *trace.Tracer
+	recorder                   *stats.Recorder
+	db                         *sql.DB          // read-only handle for the stats query API; nil when storage is off
+	reasoning                  *reasoning.Cache // in-memory reasoning_content cache for multi-turn round-trip
+	apiKey                     string           // optional inbound client API key; empty = no client auth
+	statsAPIKey                string           // optional key for the read-only /stats(*) dashboard/API; empty = open
+	search                     *search.Handler  // nil when [search] is not configured
+	searchPathField            string           // mount path for search endpoint; "" = not configured
+	live                       *liveRegistry    // in-flight requests, for GET /stats/active
+	sessions                   *session.Loader  // agent session listing, for GET /stats/sessions
+	subscriptionRoutes         map[string]bool  // paths whose Authorization is an upstream credential
+	subscriptionSSEIdleTimeout time.Duration
 }
 
 // New builds a Server. st may be nil (stats disabled); a nil logger falls back
@@ -79,40 +84,65 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	subscriptionSSEIdleTimeout := cfg.CodexSSEIdleTimeout
+	if subscriptionSSEIdleTimeout <= 0 {
+		subscriptionSSEIdleTimeout = defaultSubscriptionSSEIdleTimeout
+	}
 	upstreams := make(map[string]*target, len(cfg.Upstreams))
+	subscriptionWarningLogged := false
 	for _, uc := range cfg.Upstreams {
-		opts := upstreamOptions(uc.Protocol)
-		if uc.SupportsResponses {
-			opts = append(opts, upstream.WithResponsesPath(uc.EffectiveResponsesPath()))
+		var client *upstream.Client
+		if uc.AuthMode == config.AuthModeCodexSubscription {
+			client = upstream.NewCodexSubscription()
+			if !subscriptionWarningLogged {
+				logger.Warn("Codex subscription proxy enabled; credential passthrough is experimental",
+					"endpoint", config.CodexSubscriptionBaseURL+config.CodexSubscriptionPath)
+				subscriptionWarningLogged = true
+			}
+		} else {
+			opts := upstreamOptions(uc.Protocol)
+			if uc.SupportsResponses {
+				opts = append(opts, upstream.WithResponsesPath(uc.EffectiveResponsesPath()))
+			}
+			client = upstream.New(uc.BaseURL, uc.Path, uc.APIKey, opts...)
 		}
 		upstreams[uc.Name] = &target{
 			cfg:    uc,
-			client: upstream.New(uc.BaseURL, uc.Path, uc.APIKey, opts...),
+			client: client,
 		}
 	}
 	routes := make(map[string]config.Route, len(cfg.Routes))
+	subscriptionRoutes := make(map[string]bool)
 	for _, rc := range cfg.Routes {
 		routes[rc.Path] = rc
+		for _, rule := range rc.Models {
+			if tg, ok := upstreams[rule.Upstream]; ok && tg.cfg.AuthMode == config.AuthModeCodexSubscription {
+				subscriptionRoutes[rc.Path] = true
+				break
+			}
+		}
 	}
 	var db *sql.DB
 	if st.Enabled() {
 		db = st.DB()
 	}
 	return &Server{
-		cfg:             cfg,
-		routes:          routes,
-		upstreams:       upstreams,
-		log:             logger,
-		tracer:          trace.New(cfg.TraceDir, logger),
-		recorder:        stats.NewRecorder(st, 0, logger),
-		db:              db,
-		reasoning:       reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
-		apiKey:          cfg.ClientAPIKey,
-		statsAPIKey:     cfg.StatsAPIKey,
-		search:          newSearchHandler(cfg.Search, logger),
-		searchPathField: searchPathFromConfig(cfg.Search),
-		live:            newLiveRegistry(),
-		sessions:        session.NewLoader(),
+		cfg:                        cfg,
+		routes:                     routes,
+		upstreams:                  upstreams,
+		log:                        logger,
+		tracer:                     trace.New(cfg.TraceDir, logger),
+		recorder:                   stats.NewRecorder(st, 0, logger),
+		db:                         db,
+		reasoning:                  reasoning.New(reasoning.DefaultCapacity, reasoning.DefaultTTL),
+		apiKey:                     cfg.ClientAPIKey,
+		statsAPIKey:                cfg.StatsAPIKey,
+		search:                     newSearchHandler(cfg.Search, logger),
+		searchPathField:            searchPathFromConfig(cfg.Search),
+		live:                       newLiveRegistry(),
+		sessions:                   session.NewLoader(),
+		subscriptionRoutes:         subscriptionRoutes,
+		subscriptionSSEIdleTimeout: subscriptionSSEIdleTimeout,
 	}
 }
 
@@ -219,11 +249,16 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	rec := &respRecorder{ResponseWriter: w}
+	isSubscription := s.subscriptionRoutes[rt.Path]
+	clientPath := r.URL.RequestURI()
+	if isSubscription {
+		clientPath = rt.Path
+	}
 
 	stat := stats.Record{
 		Time:           start,
 		ClientProtocol: string(rt.InputProtocol),
-		ClientPath:     r.URL.RequestURI(),
+		ClientPath:     clientPath,
 		ClientUA:       r.UserAgent(),
 	}
 	defer func() {
@@ -248,12 +283,25 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	}()
 
 	upstreamReq := r
-	if s.apiKey != "" {
+	if s.apiKey != "" && !isSubscription {
 		upstreamReq = r.Clone(r.Context())
 		upstreamReq.Header = upstreamClientHeaders(r.Header)
 	}
+	if r.ContentLength > maxRequestBody {
+		stat.Error = "request body exceeds size limit"
+		writeError(rec, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+		return
+	}
 
+	var responseController *http.ResponseController
+	if isSubscription {
+		responseController = http.NewResponseController(rec)
+		_ = responseController.SetReadDeadline(time.Now().Add(subscriptionRequestBodyReadTimeout))
+	}
 	bodyBytes, err := readLimited(r.Body, maxRequestBody)
+	if responseController != nil {
+		_ = responseController.SetReadDeadline(time.Time{})
+	}
 	if err != nil {
 		if s.recorder != nil {
 			stat.SessionID = extractAgentSessionID(r.Header, nil)
@@ -271,14 +319,18 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	var sniff reqSniff
 	_ = json.Unmarshal(bodyBytes, &sniff)
 	stat.ClientModel = sniff.Model
-	stat.Stream = sniff.Stream
+	stream := sniff.streamHint()
+	stat.Stream = stream == streamYes
 	if s.recorder != nil {
 		stat.SessionID = extractAgentSessionID(r.Header, bodyBytes)
 	}
 
-	// Non-streaming requests get a hard cap so a hung upstream can't pin a
-	// goroutine forever. Streaming requests stay uncapped (see newTransport).
-	if !sniff.Stream {
+	// Compact and known non-streaming requests get a total timeout. Unknown
+	// subscription inference may be a compressed SSE request, so it stays
+	// uncapped until response headers establish the actual response type.
+	useTotalTimeout := rt.Operation == config.RouteOperationResponsesCompact ||
+		(!isSubscription && stream != streamYes) || (isSubscription && stream == streamNo)
+	if useTotalTimeout {
 		ctx, cancel := context.WithTimeout(upstreamReq.Context(), nonStreamTimeout)
 		defer cancel()
 		upstreamReq = upstreamReq.WithContext(ctx)
@@ -308,6 +360,10 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	}
 	stat.UpstreamProtocol = string(wireProto)
 	switch {
+	case tg.cfg.AuthMode == config.AuthModeCodexSubscription && rt.Operation == config.RouteOperationResponsesCompact:
+		stat.UpstreamURL = tg.client.CompactEndpoint()
+	case tg.cfg.AuthMode == config.AuthModeCodexSubscription:
+		stat.UpstreamURL = tg.client.Endpoint()
 	case viaResponses:
 		stat.UpstreamURL = tg.client.ResponsesEndpointWithQuery(r.URL.RawQuery)
 	case rt.InputProtocol == wireProto:
@@ -316,9 +372,16 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		stat.UpstreamURL = tg.client.Endpoint()
 	}
 
-	traceEntry := s.tracer.Begin(r.Method, r.URL.RequestURI())
-	if path := traceEntry.Dump(string(rt.InputProtocol), bodyBytes); path != "" {
-		s.log.Info("trace request", "file", path)
+	var traceEntry *trace.Entry
+	if !isSubscription {
+		traceEntry = s.tracer.Begin(r.Method, r.URL.RequestURI())
+		if path := traceEntry.Dump(string(rt.InputProtocol), bodyBytes); path != "" {
+			s.log.Info("trace request", "file", path)
+		}
+	}
+	liveStreamState := ""
+	if isSubscription {
+		liveStreamState = stream.String()
 	}
 
 	live := s.live.begin(liveBegin{
@@ -329,7 +392,8 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		upstream:      rule.Upstream,
 		path:          rt.Path,
 		ua:            r.UserAgent(),
-		stream:        sniff.Stream,
+		stream:        stat.Stream,
+		streamState:   liveStreamState,
 		inputEstimate: len(bodyBytes) / 4, // ~4 bytes per token; replaced once usage arrives
 	})
 	defer live.end()
@@ -337,6 +401,7 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	ex := &exchange{
 		target:       tg,
 		proto:        wireProto,
+		operation:    rt.Operation,
 		viaResponses: viaResponses,
 		model:        effModel,
 		w:            rec,
@@ -368,8 +433,24 @@ func (s *Server) authorizeClient(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+func (s *Server) authorizeSubscriptionClient(w http.ResponseWriter, r *http.Request) bool {
+	if s.apiKey != "" {
+		values := r.Header.Values("X-Apid-Key")
+		if len(values) != 1 || !constantTimeStringEqual(strings.TrimSpace(values[0]), s.apiKey) {
+			writeError(w, http.StatusUnauthorized, "invalid or missing apid API key")
+			return false
+		}
+	}
+	if !hasSingleBearerAuthorization(r.Header) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="openai"`)
+		writeError(w, http.StatusUnauthorized, "invalid or missing OpenAI Authorization")
+		return false
+	}
+	return true
+}
+
 func (s *Server) withClientAuth(next http.Handler) http.Handler {
-	if s.apiKey == "" && s.statsAPIKey == "" {
+	if s.apiKey == "" && s.statsAPIKey == "" && len(s.subscriptionRoutes) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -388,11 +469,31 @@ func (s *Server) withClientAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if s.subscriptionRoutes[r.URL.Path] {
+			if !s.authorizeSubscriptionClient(w, r) {
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !s.authorizeClient(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func hasSingleBearerAuthorization(h http.Header) bool {
+	values := h.Values("Authorization")
+	if len(values) != 1 {
+		return false
+	}
+	v := strings.TrimSpace(values[0])
+	if strings.Contains(v, ",") {
+		return false
+	}
+	fields := strings.Fields(v)
+	return len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") && fields[1] != ""
 }
 
 // isStatsPath reports whether the request targets the read-only stats
@@ -631,6 +732,46 @@ func (s *Server) passUpstreamError(w http.ResponseWriter, resp *http.Response, s
 	_, _ = w.Write(errBody)
 }
 
+func (s *Server) passSubscriptionUpstreamError(w http.ResponseWriter, resp *http.Response, stat *stats.Record) {
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		stat.Error = "upstream_redirect_blocked"
+		s.log.Warn("Codex subscription upstream redirect blocked", "status", resp.StatusCode)
+		writeError(w, http.StatusBadGateway, "upstream redirect blocked")
+		return
+	}
+	errBody, err := readLimited(resp.Body, maxErrorBodySize)
+	if err != nil {
+		if err == errBodyTooLarge {
+			stat.Error = "upstream_error_body_too_large"
+			writeError(w, http.StatusBadGateway, "upstream error response too large")
+			return
+		}
+		stat.Error = "upstream_error_body_read_failed"
+		writeError(w, http.StatusBadGateway, "failed to read upstream error response")
+		return
+	}
+	category := "upstream_status_" + strconv.Itoa(resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		category = "upstream_auth_failed"
+	}
+	stat.Error = category
+	s.log.Warn("Codex subscription upstream error", "status", resp.StatusCode,
+		"request_id", subscriptionRequestID(resp.Header), "category", category)
+	copySubscriptionResponseHeaders(w, resp)
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "application/json")
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(errBody)
+}
+
+func subscriptionRequestID(h http.Header) string {
+	if id := h.Get("Openai-Request-Id"); id != "" {
+		return id
+	}
+	return h.Get("X-Request-Id")
+}
+
 func toStatsUsage(u *protocol.ChatUsage) *stats.Usage {
 	if u == nil {
 		return nil
@@ -676,6 +817,8 @@ func (r *respRecorder) Flush() {
 		f.Flush()
 	}
 }
+
+func (r *respRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 type sseWriter struct {
 	w http.ResponseWriter

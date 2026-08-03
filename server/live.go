@@ -47,7 +47,8 @@ type liveBegin struct {
 	path          string
 	ua            string
 	stream        bool
-	inputEstimate int // rough token estimate from the request body size
+	streamState   string // empty = derive from stream; otherwise unknown | sync | sse
+	inputEstimate int    // rough token estimate from the request body size
 }
 
 type liveRequest struct {
@@ -89,6 +90,20 @@ func (lr *liveRequest) end() {
 	lr.reg.mu.Lock()
 	delete(lr.reg.reqs, lr.id)
 	lr.reg.mu.Unlock()
+}
+
+func (lr *liveRequest) setStream(stream bool) {
+	if lr == nil {
+		return
+	}
+	lr.mu.Lock()
+	lr.info.stream = stream
+	if stream {
+		lr.info.streamState = "sse"
+	} else {
+		lr.info.streamState = "sync"
+	}
+	lr.mu.Unlock()
 }
 
 // sseObserver returns a per-line callback that keeps this entry's token
@@ -232,6 +247,7 @@ type liveReqEntry struct {
 	Path             string `json:"path"`
 	ClientUA         string `json:"client_ua"`
 	Stream           bool   `json:"stream"`
+	StreamState      string `json:"stream_state"`
 	InputTokens      int    `json:"input_tokens"`
 	InputEst         bool   `json:"input_est"`
 	OutputTokens     int    `json:"output_tokens"`
@@ -255,6 +271,14 @@ func (lr *liveRequest) snapshot(now time.Time) liveReqEntry {
 		Path:             lr.info.path,
 		ClientUA:         lr.info.ua,
 		Stream:           lr.info.stream,
+		StreamState:      lr.info.streamState,
+	}
+	if e.StreamState == "" {
+		if e.Stream {
+			e.StreamState = "sse"
+		} else {
+			e.StreamState = "sync"
+		}
 	}
 	if lr.info.clientProto != lr.info.upstreamProto {
 		e.Mode = "convert"

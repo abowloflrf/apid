@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/abowloflrf/apid/config"
 	"github.com/abowloflrf/apid/protocol"
@@ -16,7 +18,36 @@ import (
 // field names. A parse failure yields zero values, which is harmless.
 type reqSniff struct {
 	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Stream *bool  `json:"stream"`
+}
+
+type streamHint uint8
+
+const (
+	streamUnknown streamHint = iota
+	streamNo
+	streamYes
+)
+
+func (r reqSniff) streamHint() streamHint {
+	if r.Stream == nil {
+		return streamUnknown
+	}
+	if *r.Stream {
+		return streamYes
+	}
+	return streamNo
+}
+
+func (h streamHint) String() string {
+	switch h {
+	case streamNo:
+		return "sync"
+	case streamYes:
+		return "sse"
+	default:
+		return "unknown"
+	}
 }
 
 // Limits for body reads. These guard against memory exhaustion from
@@ -68,24 +99,40 @@ func (s *Server) forwardRaw(ex *exchange) {
 		resp *http.Response
 		err  error
 	)
-	if ex.viaResponses {
+	if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+		compact := ex.operation == config.RouteOperationResponsesCompact
+		resp, err = ex.target.client.ForwardCodexSubscription(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery, compact)
+	} else if ex.viaResponses {
 		resp, err = ex.target.client.ForwardResponsesWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
 	} else {
 		resp, err = ex.target.client.ForwardWithQuery(ex.req.Context(), fwdBody, ex.req.Header, ex.req.URL.RawQuery)
 	}
 	if err != nil {
-		ex.stat.Error = "upstream: " + err.Error()
-		writeError(ex.w, http.StatusBadGateway, err.Error())
+		if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+			ex.stat.Error = "upstream_request_failed"
+			writeError(ex.w, http.StatusBadGateway, "upstream request failed")
+		} else {
+			ex.stat.Error = "upstream: " + err.Error()
+			writeError(ex.w, http.StatusBadGateway, err.Error())
+		}
 		return
 	}
 	defer resp.Body.Close()
 	ex.stat.UpstreamStatus = resp.StatusCode
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.passUpstreamError(ex.w, resp, ex.stat)
+		if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+			s.passSubscriptionUpstreamError(ex.w, resp, ex.stat)
+		} else {
+			s.passUpstreamError(ex.w, resp, ex.stat)
+		}
 		return
 	}
 
+	if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+		ex.stat.Stream = responseIsSSE(resp)
+		ex.live.setStream(ex.stat.Stream)
+	}
 	if ex.stat.Stream {
 		s.forwardStream(ex, resp)
 		return
@@ -99,8 +146,17 @@ func forwardJSON(ex *exchange, resp *http.Response) {
 	body, err := readLimited(resp.Body, maxResponseBody)
 	if err != nil {
 		if err == errBodyTooLarge {
-			ex.stat.Error = "upstream response exceeds size limit"
+			if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+				ex.stat.Error = "upstream_response_body_too_large"
+			} else {
+				ex.stat.Error = "upstream response exceeds size limit"
+			}
 			writeError(ex.w, http.StatusBadGateway, "upstream response too large")
+			return
+		}
+		if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+			ex.stat.Error = "upstream_response_body_read_failed"
+			writeError(ex.w, http.StatusBadGateway, "failed to read upstream response")
 			return
 		}
 		ex.stat.Error = "read upstream response: " + err.Error()
@@ -109,7 +165,7 @@ func forwardJSON(ex *exchange, resp *http.Response) {
 	}
 	ex.stat.Usage = extractUsage(ex.proto, body)
 
-	copyContentType(ex.w, resp)
+	copyResponseHeaders(ex, resp)
 	ex.w.WriteHeader(resp.StatusCode)
 	_, _ = ex.w.Write(body)
 }
@@ -122,12 +178,16 @@ func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
 		writeError(ex.w, http.StatusInternalServerError, "streaming not supported by server")
 		return
 	}
-	copyContentType(ex.w, resp)
+	copyResponseHeaders(ex, resp)
 	ex.w.Header().Set("Cache-Control", "no-cache")
 	ex.w.Header().Set("Connection", "keep-alive")
 	ex.w.WriteHeader(resp.StatusCode)
 
-	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, resp.Body,
+	streamBody := io.Reader(resp.Body)
+	if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+		streamBody = &idleTimeoutReader{ctx: ex.req.Context(), src: resp.Body, timeout: s.subscriptionSSEIdleTimeout}
+	}
+	usage, firstAt, err := forwardSSE(ex.req.Context(), &sseWriter{w: ex.w, f: flusher}, streamBody,
 		ex.proto, ex.live.sseObserver(ex.proto))
 	if err != nil {
 		switch {
@@ -145,8 +205,19 @@ func (s *Server) forwardStream(ex *exchange, resp *http.Response) {
 				"model", ex.stat.UpstreamModel)
 			ex.stat.Error = "client aborted"
 		default:
-			s.log.Warn("sse forward failed", "err", err)
-			ex.stat.Error = "sse forward: " + err.Error()
+			if ex.target.cfg.AuthMode == config.AuthModeCodexSubscription {
+				category := "upstream_sse_read_failed"
+				if errors.Is(err, errSSEIdleTimeout) {
+					category = "upstream_sse_idle_timeout"
+				} else if errors.Is(err, errSSELineTooLarge) {
+					category = "upstream_sse_line_too_large"
+				}
+				s.log.Warn("Codex subscription SSE forwarding failed", "category", category)
+				ex.stat.Error = category
+			} else {
+				s.log.Warn("sse forward failed", "err", err)
+				ex.stat.Error = "sse forward: " + err.Error()
+			}
 		}
 	}
 	if usage != nil {
@@ -241,4 +312,37 @@ func copyContentType(w http.ResponseWriter, resp *http.Response) {
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+}
+
+func copyResponseHeaders(ex *exchange, resp *http.Response) {
+	if ex.target.cfg.AuthMode != config.AuthModeCodexSubscription {
+		copyContentType(ex.w, resp)
+		return
+	}
+	copySubscriptionResponseHeaders(ex.w, resp)
+}
+
+func copySubscriptionResponseHeaders(w http.ResponseWriter, resp *http.Response) {
+	for k, values := range resp.Header {
+		if !allowSubscriptionResponseHeader(k) {
+			continue
+		}
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+}
+
+func allowSubscriptionResponseHeader(key string) bool {
+	canonical := http.CanonicalHeaderKey(key)
+	switch canonical {
+	case "Content-Type", "Content-Encoding", "Retry-After", "X-Request-Id", "Openai-Request-Id":
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(key), "x-ratelimit-")
+}
+
+func responseIsSSE(resp *http.Response) bool {
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "text/event-stream")
 }

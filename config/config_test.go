@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeTOML writes a TOML file in a temp dir and returns its path.
@@ -510,6 +511,7 @@ func isolateEnv(t *testing.T) {
 	t.Setenv("APID_DB", "")
 	t.Setenv("APID_TRACE", "")
 	t.Setenv("APID_TRACE_DIR", "")
+	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "")
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -523,6 +525,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.DB != "" || cfg.TraceDir != "" {
 		t.Errorf("DB=%q TraceDir=%q, want both empty", cfg.DB, cfg.TraceDir)
+	}
+	if cfg.CodexSSEIdleTimeout != 5*time.Minute {
+		t.Errorf("CodexSSEIdleTimeout = %s, want 5m", cfg.CodexSSEIdleTimeout)
 	}
 	if cfg.ClientAPIKey != "" {
 		t.Errorf("ClientAPIKey = %q, want empty", cfg.ClientAPIKey)
@@ -606,5 +611,156 @@ func TestTruthy(t *testing.T) {
 		if truthy(v) {
 			t.Errorf("truthy(%q) = true, want false", v)
 		}
+	}
+}
+
+func TestLoadCodexSSEIdleTimeout(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "45s")
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CodexSSEIdleTimeout != 45*time.Second {
+		t.Fatalf("CodexSSEIdleTimeout = %s", cfg.CodexSSEIdleTimeout)
+	}
+
+	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "invalid")
+	if _, err := Load(writeTOML(t, minimalTOML)); err == nil {
+		t.Fatal("invalid APID_CODEX_SSE_IDLE_TIMEOUT should fail")
+	}
+}
+
+const subscriptionTOML = `
+client_api_key = "local-key"
+
+[[upstream]]
+name = "codex-subscription"
+protocol = "openai_responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+path = "/responses"
+auth_mode = "codex_subscription"
+
+[[route]]
+path = "/codex/v1/responses"
+input_protocol = "openai_responses"
+  [[route.model]]
+  match = "*"
+  upstream = "codex-subscription"
+  model = ""
+
+[[route]]
+path = "/codex/v1/responses/compact"
+input_protocol = "openai_responses"
+operation = "responses_compact"
+  [[route.model]]
+  match = "*"
+  upstream = "codex-subscription"
+  model = ""
+`
+
+func TestLoadCodexSubscription(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_LISTEN", "127.0.0.1:19092")
+	cfg, err := Load(writeTOML(t, subscriptionTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Upstreams[0].AuthMode != AuthModeCodexSubscription {
+		t.Fatalf("AuthMode = %q", cfg.Upstreams[0].AuthMode)
+	}
+	if cfg.Routes[1].Operation != RouteOperationResponsesCompact {
+		t.Fatalf("Operation = %q", cfg.Routes[1].Operation)
+	}
+}
+
+func TestLoadCodexSubscriptionRequiresLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		listen string
+		ok     bool
+	}{
+		{"127.0.0.1:19092", true},
+		{"127.42.0.9:19092", true},
+		{"[::1]:19092", true},
+		{"localhost:19092", false},
+		{":19092", false},
+		{"0.0.0.0:19092", false},
+		{"192.168.1.2:19092", false},
+		{"[fe80::1%lo]:19092", false},
+		{"[::ffff:127.0.0.1]:19092", false},
+	} {
+		t.Run(tc.listen, func(t *testing.T) {
+			isolateEnv(t)
+			t.Setenv("APID_LISTEN", tc.listen)
+			_, err := Load(writeTOML(t, subscriptionTOML))
+			if (err == nil) != tc.ok {
+				t.Fatalf("Load error = %v, want success=%v", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestLoadFileRejectsUnsafeCodexSubscriptionConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		old  string
+		new  string
+		want string
+	}{
+		{"unknown auth mode", `auth_mode = "codex_subscription"`, `auth_mode = "passthrough"`, "invalid auth_mode"},
+		{"wrong origin", CodexSubscriptionBaseURL, "https://example.com/backend-api/codex", "base_url must be"},
+		{"userinfo origin", CodexSubscriptionBaseURL, "https://user@chatgpt.com/backend-api/codex", "base_url must be"},
+		{"query in origin", CodexSubscriptionBaseURL, CodexSubscriptionBaseURL + "?target=evil", "base_url must be"},
+		{"fragment in origin", CodexSubscriptionBaseURL, CodexSubscriptionBaseURL + "#fragment", "base_url must be"},
+		{"wrong path", `path = "/responses"`, `path = "/other"`, "path must be"},
+		{"wrong protocol", `protocol = "openai_responses"`, `protocol = "openai_chat_completions"`, "protocol must be"},
+		{"api key", `auth_mode = "codex_subscription"`, "api_key = \"secret\"\nauth_mode = \"codex_subscription\"", "api_key must be empty"},
+		{"upstream model", `auth_mode = "codex_subscription"`, "model = \"gpt-x\"\nauth_mode = \"codex_subscription\"", "model must be empty"},
+		{"rule model omitted", `  model = ""`, ``, `requires model = ""`},
+		{"implicit catchall", `  match = "*"`, ``, `exactly one match = "*"`},
+		{"extra exact rule", `  model = ""`, "  model = \"\"\n  [[route.model]]\n  match = \"gpt-*\"\n  upstream = \"codex-subscription\"\n  model = \"\"", "exactly one match"},
+		{"unknown operation", `operation = "responses_compact"`, `operation = "arbitrary_proxy"`, "invalid operation"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contents := strings.Replace(subscriptionTOML, tc.old, tc.new, 1)
+			_, _, err := loadFile(writeTOML(t, contents))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFileRejectsMixedCodexSubscriptionRoute(t *testing.T) {
+	path := writeTOML(t, `
+[[upstream]]
+name = "subscription"
+protocol = "openai_responses"
+base_url = "https://chatgpt.com/backend-api/codex"
+path = "/responses"
+auth_mode = "codex_subscription"
+
+[[upstream]]
+name = "normal"
+protocol = "openai_responses"
+base_url = "https://api.example.com"
+path = "/v1/responses"
+
+[[route]]
+path = "/codex/v1/responses"
+input_protocol = "openai_responses"
+  [[route.model]]
+  match = "gpt-*"
+  upstream = "normal"
+  model = ""
+  [[route.model]]
+  match = "*"
+  upstream = "subscription"
+  model = ""
+`)
+	_, _, err := loadFile(path)
+	if err == nil || !strings.Contains(err.Error(), "must not mix") {
+		t.Fatalf("error = %v, want mixed auth-mode rejection", err)
 	}
 }

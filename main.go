@@ -33,8 +33,8 @@ Usage:
 
 Forwarding config (a TOML file at --config, default ./config.toml; missing file = startup failure):
   client_api_key optional static key for clients calling apid (empty/omitted = disabled)
-  [[upstream]]  a backend, reused by name: name / protocol / base_url / path / api_key / model
-  [[route]]     an entrypoint, dispatched by request model: path / input_protocol / [[route.model]]{match, upstream}
+  [[upstream]]  a backend, reused by name: name / protocol / base_url / path / api_key / model / auth_mode
+  [[route]]     an entrypoint: path / input_protocol / operation / [[route.model]]{match, upstream}
   Protocols: openai_responses, openai_chat_completions, anthropic_messages.
   See config.example.toml in the repo for a full example.
 
@@ -44,6 +44,7 @@ Ops params (environment variables; ./.env is loaded first, real env vars take pr
   APID_TRACE_DIR  directory for TRACE dumps; takes precedence when set
   APID_TRACE      when truthy (1/true/yes/on), dump TRACE to ./logs (default off)
   APID_DB         SQLite database file path; records request metrics async when set (empty = off)
+  APID_CODEX_SSE_IDLE_TIMEOUT  Codex subscription SSE idle timeout (default 5m)
 
 Stats (read-only, only when APID_DB is set):
   GET /stats/        interactive dashboard UI (tokens / models / latency, filterable).

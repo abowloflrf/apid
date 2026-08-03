@@ -18,6 +18,11 @@ type sink struct{ b strings.Builder }
 func (s *sink) Write(p []byte) (int, error) { return s.b.Write(p) }
 func (s *sink) Flush()                      {}
 
+type failingSink struct{ err error }
+
+func (s failingSink) Write([]byte) (int, error) { return 0, s.err }
+func (s failingSink) Flush()                    {}
+
 func TestRequestTools(t *testing.T) {
 	body := `{
       "model":"m",
@@ -365,6 +370,17 @@ func TestStreamCreatedAndInProgress(t *testing.T) {
 	// 收尾事件也应带 created_at。
 	if tail := out[strings.Index(out, "event: response.completed"):]; !strings.Contains(tail, `"created_at":`) {
 		t.Errorf("response.completed 缺少 created_at, 输出:\n%s", out)
+	}
+}
+
+func TestStreamWriteError(t *testing.T) {
+	want := errors.New("client write failed")
+	result, err := StreamChatToResponses(context.Background(), failingSink{err: want}, strings.NewReader("data: [DONE]\n\n"), "m", nil)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want client write failure", err)
+	}
+	if result == nil {
+		t.Fatal("StreamResult should preserve partial state on write failure")
 	}
 }
 
