@@ -48,6 +48,28 @@ func TestStateVersion(t *testing.T) {
 	}
 }
 
+func TestIsCodexGuardianSource(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"guardian", `{"subagent":{"other":"guardian"}}`, true},
+		{"guardian with whitespace", `{ "subagent": { "other": "guardian" } }`, true},
+		{"spawned subagent", `{"subagent":{"thread_spawn":{"agent_role":"explorer"}}}`, false},
+		{"other subagent", `{"subagent":{"other":"reviewer"}}`, false},
+		{"user source", "cli", false},
+		{"malformed", "{", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCodexGuardianSource(tt.raw); got != tt.want {
+				t.Errorf("isCodexGuardianSource(%q) = %t, want %t", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCodexRolloutDiscoveryIsRecursive(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("CODEX_HOME", root)

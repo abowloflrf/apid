@@ -63,6 +63,9 @@ func loadFromStateDB(dbPath string) []Session {
 			&cwd, &model, &reasoning, &tokens, &archived, &cli, &rollout); err != nil {
 			continue
 		}
+		if isCodexGuardianSource(source.String) {
+			continue
+		}
 		s.Title = orString(title, "(无标题)")
 		s.CreatedAt = normalizeEpoch(created.Int64)
 		s.UpdatedAt = normalizeEpoch(updated.Int64)
@@ -79,6 +82,15 @@ func loadFromStateDB(dbPath string) []Session {
 		sessions = append(sessions, s)
 	}
 	return sessions
+}
+
+func isCodexGuardianSource(raw string) bool {
+	var source struct {
+		Subagent struct {
+			Other string `json:"other"`
+		} `json:"subagent"`
+	}
+	return json.Unmarshal([]byte(raw), &source) == nil && source.Subagent.Other == "guardian"
 }
 
 // rolloutMeta is the first JSONL line of a rollout file (session_meta event).

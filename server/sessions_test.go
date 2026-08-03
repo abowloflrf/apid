@@ -93,6 +93,10 @@ func TestSessionsCodexStateDB(t *testing.T) {
 	mustExec(t, db, `INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"codex-2", "Archived", 1700000000000, 1700003700000, "vscode", "openai",
 		"/tmp/proj2", "gpt-4o", "", 500, 1, "0.1.0", "/tmp/rollout-2.jsonl")
+	mustExec(t, db, `INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"review-1", "Internal approval review", 1700000000000, 1700003800000,
+		`{"subagent":{"other":"guardian"}}`, "openai", "/tmp/proj", "glm-5.2", "medium",
+		200, 0, "0.1.0", "/tmp/rollout-review.jsonl")
 
 	out := getSessions(t, sessionsServer(t), "tool=codex")
 	if out.Total != 2 || len(out.Sessions) != 2 {
