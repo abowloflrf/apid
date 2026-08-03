@@ -103,7 +103,8 @@ func TestSessionsCodexStateDB(t *testing.T) {
 		t.Errorf("first session = %+v", s)
 	}
 	if s := out.Sessions[1]; s.ID != "codex-1" || s.Archived || s.Title != "Codex session" ||
-		s.Model != "gpt-5" || s.TokensUsed != 1000 || s.CliVersion != "0.1.0" {
+		s.Model != "gpt-5" || s.Source != "cli" || s.ModelProvider != "openai" ||
+		s.TokensUsed != 1000 || s.CliVersion != "0.1.0" {
 		t.Errorf("second session = %+v", s)
 	}
 	if s := out.Sessions[1]; s.CacheHitRate != nil {
@@ -122,6 +123,10 @@ func TestSessionsCodexStateDB(t *testing.T) {
 	paged := getSessions(t, sessionsServer(t), "tool=codex&limit=1&offset=1")
 	if paged.Total != 2 || len(paged.Sessions) != 1 || paged.Sessions[0].ID != "codex-1" {
 		t.Errorf("paged -> total %d, %d rows", paged.Total, len(paged.Sessions))
+	}
+	sourced := getSessions(t, sessionsServer(t), "tool=codex&source=vscode&cwd=proj2")
+	if sourced.Total != 1 || sourced.Sessions[0].ID != "codex-2" {
+		t.Errorf("source/cwd filter -> %+v", sourced.Sessions)
 	}
 }
 

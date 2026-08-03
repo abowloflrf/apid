@@ -45,6 +45,25 @@ guarded independently by a top-level `stats_api_key`. When set, the same three
 header styles are accepted. Leave it empty to keep stats open (Grafana can send
 the key as a custom header in its Infinity datasource).
 
+## Session CLI
+
+`apid-ctl` lists local Codex, Claude Code, pi, and OpenCode sessions using the
+same Go readers as `GET /stats/sessions`. On a terminal it opens a responsive,
+keyboard-navigable table; redirected output automatically uses a plain table.
+
+```bash
+go run ./cmd/apid-ctl                 # latest 20 token-bearing sessions
+go run ./cmd/apid-ctl --tool codex -n 50
+go run ./cmd/apid-ctl --cwd apid --since 7d
+go run ./cmd/apid-ctl --json
+go install ./cmd/apid-ctl             # install the standalone binary
+```
+
+Use `--all` to remove the limit, `--archived` for archived sessions, and
+`--plain` to skip the interactive table. The source locations honor
+`CODEX_HOME`, `CODEX_SQLITE_HOME`, `CLAUDE_HOME`, `PI_CODING_AGENT_DIR`,
+`OPENCODE_DATA_HOME`, and `OPENCODE_DB` just like the Python script.
+
 ## Docker
 
 ```bash

@@ -19,6 +19,8 @@ type Query struct {
 	Tools    []string // empty = all tools
 	Archived *bool    // nil = both states
 	Q        string   // cwd/title substring, case-insensitive
+	CWD      string   // cwd substring, case-insensitive
+	Source   string   // source substring, case-insensitive (codex only)
 	Since    int64    // unix ms; only sessions updated at/after this
 	Sort     string   // "updated" (default) | "created"
 	Limit    int      // page size; <= 0 means no limit
@@ -43,6 +45,7 @@ type Result struct {
 type Loader struct {
 	mu      sync.Mutex
 	ttl     time.Duration
+	tools   []string
 	loaded  time.Time
 	sess    []Session
 	sources []SourceInfo
@@ -54,11 +57,33 @@ func NewLoader() *Loader {
 	return &Loader{ttl: 60 * time.Second, enrich: NewEnrichCache()}
 }
 
+// NewLoaderForTools returns a Loader that only scans the selected backing
+// stores. It is useful for one-shot commands; the server uses NewLoader so its
+// cache can serve arbitrary filters.
+func NewLoaderForTools(tools ...string) *Loader {
+	return &Loader{
+		ttl:    60 * time.Second,
+		tools:  append([]string(nil), tools...),
+		enrich: NewEnrichCache(),
+	}
+}
+
 // List returns the page of sessions matching q. When withTokens is set all
 // matching sessions are enriched before paging, so zero-token sessions can be
 // excluded from the result and its total. Without it only the cheap metadata
 // columns are returned.
 func (l *Loader) List(q Query, withTokens bool) Result {
+	return l.list(q, withTokens, false)
+}
+
+// Display returns an enriched display page and stops scanning once that page
+// is full. It mirrors the standalone script's fast path; callers that need an
+// exact total across all token-bearing sessions should use List instead.
+func (l *Loader) Display(q Query) Result {
+	return l.list(q, true, true)
+}
+
+func (l *Loader) list(q Query, withTokens, stopAfterPage bool) Result {
 	all, sources := l.scan()
 	all = filterSessions(all, q)
 	sortSessions(all, q.Sort)
@@ -69,18 +94,34 @@ func (l *Loader) List(q Query, withTokens bool) Result {
 			l.enrich.Enrich(&s)
 			if s.TokensUsed > 0 {
 				enriched = append(enriched, s)
+				if stopAfterPage && q.Limit > 0 && len(enriched) >= q.Offset+q.Limit {
+					break
+				}
 			}
 		}
 		all = enriched
 	}
 
-	res := Result{Total: len(all), Sources: sources}
+	res := Result{Total: len(all), Sources: filterSources(sources, q.Tools)}
 	start, end := pageBounds(q.Offset, q.Limit, len(all))
 	res.Sessions = make([]Session, 0, end-start)
 	for _, s := range all[start:end] {
 		res.Sessions = append(res.Sessions, s) // value copy: enrich must not dirty the cache
 	}
 	return res
+}
+
+func filterSources(sources []SourceInfo, tools []string) []SourceInfo {
+	if len(tools) == 0 {
+		return sources
+	}
+	out := make([]SourceInfo, 0, len(sources))
+	for _, source := range sources {
+		if contains(tools, source.Tool) {
+			out = append(out, source)
+		}
+	}
+	return out
 }
 
 // scan lists every session once per ttl window.
@@ -93,30 +134,48 @@ func (l *Loader) scan() ([]Session, []SourceInfo) {
 	var sess []Session
 	var sources []SourceInfo
 
-	if s, desc := loadCodex(); len(s) > 0 {
+	if l.wantTool(ToolCodex) {
+		s, desc := loadCodex()
 		sess = append(sess, s...)
-		sources = append(sources, SourceInfo{Tool: ToolCodex, Label: "Codex", Desc: desc})
+		if desc != "" {
+			sources = append(sources, SourceInfo{Tool: ToolCodex, Label: "Codex", Desc: desc})
+		}
 	}
-	if s, desc := loadClaude(); len(s) > 0 {
+	if l.wantTool(ToolClaude) {
+		s, desc := loadClaude()
 		sess = append(sess, s...)
-		sources = append(sources, SourceInfo{Tool: ToolClaude, Label: "Claude", Desc: desc})
+		if desc != "" {
+			sources = append(sources, SourceInfo{Tool: ToolClaude, Label: "Claude", Desc: desc})
+		}
 	}
-	if s, desc := loadPi(); len(s) > 0 {
+	if l.wantTool(ToolPi) {
+		s, desc := loadPi()
 		sess = append(sess, s...)
-		sources = append(sources, SourceInfo{Tool: ToolPi, Label: "pi", Desc: desc})
+		if desc != "" {
+			sources = append(sources, SourceInfo{Tool: ToolPi, Label: "pi", Desc: desc})
+		}
 	}
-	if s, desc := loadOpenCode(); len(s) > 0 {
+	if l.wantTool(ToolOpenCode) {
+		s, desc := loadOpenCode()
 		sess = append(sess, s...)
-		sources = append(sources, SourceInfo{Tool: ToolOpenCode, Label: "OpenCode", Desc: desc})
+		if desc != "" {
+			sources = append(sources, SourceInfo{Tool: ToolOpenCode, Label: "OpenCode", Desc: desc})
+		}
 	}
 
 	l.sess, l.sources, l.loaded = sess, sources, time.Now()
 	return sess, sources
 }
 
+func (l *Loader) wantTool(tool string) bool {
+	return len(l.tools) == 0 || contains(l.tools, tool)
+}
+
 func filterSessions(all []Session, q Query) []Session {
 	out := make([]Session, 0, len(all))
 	needle := strings.ToLower(q.Q)
+	cwdNeedle := strings.ToLower(q.CWD)
+	sourceNeedle := strings.ToLower(q.Source)
 	for _, s := range all {
 		if len(q.Tools) > 0 && !contains(q.Tools, s.Tool) {
 			continue
@@ -125,6 +184,12 @@ func filterSessions(all []Session, q Query) []Session {
 			continue
 		}
 		if q.Since > 0 && s.UpdatedAt < q.Since {
+			continue
+		}
+		if cwdNeedle != "" && !strings.Contains(strings.ToLower(s.CWD), cwdNeedle) {
+			continue
+		}
+		if sourceNeedle != "" && !strings.Contains(strings.ToLower(s.Source), sourceNeedle) {
 			continue
 		}
 		if needle != "" {

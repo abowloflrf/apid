@@ -12,11 +12,13 @@ import (
 // pre-db storage/session/info JSON format, plus a store description.
 func loadOpenCode() ([]Session, string) {
 	if db := findOpencodeDB(); db != "" {
-		if s := loadOpenCodeDB(db); len(s) > 0 {
-			return s, filepath.Base(db)
-		}
+		return loadOpenCodeDB(db), db
 	}
-	return loadOpenCodeLegacy(), "storage/"
+	storage := filepath.Join(opencodeDataHome(), "storage")
+	if fi, err := os.Stat(storage); err == nil && fi.IsDir() {
+		return loadOpenCodeLegacy(), storage + string(filepath.Separator)
+	}
+	return nil, ""
 }
 
 // opencodeModel decodes the model column, which is either a plain model id or
@@ -170,7 +172,7 @@ func openCodeSession(selected []string, vals []any, dbPath string) (Session, boo
 		}
 		return 0
 	}
-	model, _ := opencodeModel(get("model"))
+	model, provider := opencodeModel(get("model"))
 	var s Session
 	s.ID = str(get("id"))
 	s.Title = str(get("title"))
@@ -181,6 +183,7 @@ func openCodeSession(selected []string, vals []any, dbPath string) (Session, boo
 	s.UpdatedAt = ts(get("time_updated"))
 	s.CWD = str(get("directory"))
 	s.Model = model
+	s.ModelProvider = provider
 	s.Archived = ts(get("time_archived")) != 0
 	s.CliVersion = str(get("version"))
 	s.RolloutPath = dbPath
@@ -249,7 +252,7 @@ func loadOpenCodeLegacy() []Session {
 		if json.Unmarshal(data, &info) != nil || info.ID == "" {
 			continue
 		}
-		model, _ := opencodeModel(info.Model)
+		model, provider := opencodeModel(info.Model)
 		cwd := info.Path.CWD
 		if cwd == "" {
 			cwd = info.Directory
@@ -260,15 +263,16 @@ func loadOpenCodeLegacy() []Session {
 			updated = created
 		}
 		s := Session{
-			ID:         info.ID,
-			Title:      orEmpty(info.Title, "(无标题)"),
-			CreatedAt:  created,
-			UpdatedAt:  updated,
-			CWD:        cwd,
-			Model:      model,
-			CliVersion: info.Version,
-			RolloutPath: path,
-			Tool:       ToolOpenCode,
+			ID:            info.ID,
+			Title:         orEmpty(info.Title, "(无标题)"),
+			CreatedAt:     created,
+			UpdatedAt:     updated,
+			CWD:           cwd,
+			Model:         model,
+			ModelProvider: provider,
+			CliVersion:    info.Version,
+			RolloutPath:   path,
+			Tool:          ToolOpenCode,
 		}
 		out := info.Tokens.Output + info.Tokens.Reasoning
 		total := info.Tokens.Input + out + info.Tokens.Cache.Read + info.Tokens.Cache.Write

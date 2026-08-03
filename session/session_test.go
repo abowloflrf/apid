@@ -48,6 +48,57 @@ func TestStateVersion(t *testing.T) {
 	}
 }
 
+func TestCodexRolloutDiscoveryIsRecursive(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CODEX_HOME", root)
+	t.Setenv("CODEX_SQLITE_HOME", filepath.Join(root, "sqlite"))
+	path := filepath.Join(root, "sessions", "2026", "08", "03", "rollout-deep.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"session_meta","payload":{"id":"deep","timestamp":"2026-08-03T10:00:00Z","source":"vscode","model_provider":"apid","cwd":"/work/deep","cli_version":"1.2.3"}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, desc := loadCodex()
+	if desc != "sessions/ (JSONL)" || len(sessions) != 1 {
+		t.Fatalf("loadCodex = %q, %+v", desc, sessions)
+	}
+	got := sessions[0]
+	if got.ID != "deep" || got.Source != "vscode" || got.ModelProvider != "apid" || got.RolloutPath != path {
+		t.Errorf("session = %+v", got)
+	}
+}
+
+func TestParsePiFilenameTime(t *testing.T) {
+	for _, value := range []string{"2026-05-23T15-55-35-901Z", "2026-05-23T15-55-35Z"} {
+		if got := parsePiFilenameTime(value); got == 0 {
+			t.Errorf("parsePiFilenameTime(%q) = 0", value)
+		}
+	}
+}
+
+func TestPiSessionNameAndProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "2026-05-23T15-55-35-901Z_pi-id.jsonl")
+	content := `{"type":"session_info","name":"Friendly name"}` + "\n"
+	content += `{"type":"message","message":{"role":"user","content":"Raw first prompt"}}` + "\n"
+	content += `{"type":"model_change","provider":"deepseek","modelId":"v4"}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := scanPiSession(path)
+	if got == nil {
+		t.Fatal("scanPiSession returned nil")
+	}
+	if got.Title != "Friendly name" || got.ModelProvider != "deepseek" || got.Model != "deepseek/v4" {
+		t.Errorf("session = %+v", got)
+	}
+	if got.CreatedAt == 0 {
+		t.Error("filename timestamp was not parsed")
+	}
+}
+
 func TestUsageFieldsFrom(t *testing.T) {
 	// openai-style keys (codex)
 	f := usageFieldsFrom(map[string]any{
@@ -112,6 +163,11 @@ func TestFilterSortSummarize(t *testing.T) {
 	f = filterSessions(append(all, arch), Query{Archived: &onlyArch})
 	if len(f) != 1 || f[0].ID != "d" {
 		t.Errorf("archived filter -> %+v", f)
+	}
+	arch.Source = "vscode"
+	f = filterSessions(append(all, arch), Query{CWD: "WORK/X", Source: "VSCODE"})
+	if len(f) != 1 || f[0].ID != "d" {
+		t.Errorf("cwd/source filter -> %+v", f)
 	}
 
 	// summary: cache rate uses per-tool denominators

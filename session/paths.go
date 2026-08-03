@@ -11,12 +11,12 @@ import (
 // platform defaults (XDG for opencode, $HOME for the rest).
 
 func codexHome() string {
-	return homeOr("CODEX_HOME", filepath.Join(os.Getenv("HOME"), ".codex"))
+	return homeOr("CODEX_HOME", filepath.Join(userHome(), ".codex"))
 }
 
 func sqliteHome() string {
 	if v := os.Getenv("CODEX_SQLITE_HOME"); v != "" {
-		return v
+		return resolvePath(v)
 	}
 	return codexHome()
 }
@@ -34,31 +34,31 @@ func findStateDB() string {
 }
 
 func claudeHome() string {
-	return homeOr("CLAUDE_HOME", filepath.Join(os.Getenv("HOME"), ".claude"))
+	return homeOr("CLAUDE_HOME", filepath.Join(userHome(), ".claude"))
 }
 
 func piHome() string {
-	return homeOr("PI_CODING_AGENT_DIR", filepath.Join(os.Getenv("HOME"), ".pi", "agent"))
+	return homeOr("PI_CODING_AGENT_DIR", filepath.Join(userHome(), ".pi", "agent"))
 }
 
 // opencodeDataHome follows the XDG base-directory rule per platform.
 func opencodeDataHome() string {
 	if v := os.Getenv("OPENCODE_DATA_HOME"); v != "" {
-		return v
+		return resolvePath(v)
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		return filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "opencode")
+		return filepath.Join(userHome(), "Library", "Application Support", "opencode")
 	case "windows":
 		appdata := os.Getenv("APPDATA")
 		if appdata == "" {
-			appdata = filepath.Join(os.Getenv("HOME"), "AppData", "Roaming")
+			appdata = filepath.Join(userHome(), "AppData", "Roaming")
 		}
 		return filepath.Join(appdata, "opencode")
 	default:
 		xdg := os.Getenv("XDG_DATA_HOME")
 		if xdg == "" {
-			xdg = filepath.Join(os.Getenv("HOME"), ".local", "share")
+			xdg = filepath.Join(userHome(), ".local", "share")
 		}
 		return filepath.Join(xdg, "opencode")
 	}
@@ -68,7 +68,7 @@ func opencodeDataHome() string {
 // home when relative) or the most recently modified opencode*.db.
 func findOpencodeDB() string {
 	if v := os.Getenv("OPENCODE_DB"); v != "" {
-		p := v
+		p := expandUser(v)
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(opencodeDataHome(), p)
 		}
@@ -90,4 +90,21 @@ func findOpencodeDB() string {
 		return fi1.ModTime().After(fi2.ModTime())
 	})
 	return matches[0]
+}
+
+func walkFiles(root string, match func(string) bool) []string {
+	var paths []string
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			if entry != nil && entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.IsDir() && match(entry.Name()) {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	return paths
 }

@@ -29,11 +29,13 @@ func orString(v sql.NullString, fallback string) string {
 // files when no state db exists, plus a short description of the backing store.
 func loadCodex() ([]Session, string) {
 	if db := findStateDB(); db != "" {
-		if s := loadFromStateDB(db); len(s) > 0 {
-			return s, filepath.Base(db)
-		}
+		return loadFromStateDB(db), filepath.Base(db)
 	}
-	return loadFromRolloutFiles(), "sessions/ (JSONL)"
+	sessionsDir := filepath.Join(codexHome(), "sessions")
+	if fi, err := os.Stat(sessionsDir); err == nil && fi.IsDir() {
+		return loadFromRolloutFiles(), "sessions/ (JSONL)"
+	}
+	return nil, ""
 }
 
 func loadFromStateDB(dbPath string) []Session {
@@ -44,7 +46,7 @@ func loadFromStateDB(dbPath string) []Session {
 	defer conn.Close()
 
 	rows, err := conn.Query(`SELECT id, title, created_at, updated_at,
-		cwd, model, reasoning_effort, tokens_used, archived,
+		source, model_provider, cwd, model, reasoning_effort, tokens_used, archived,
 		cli_version, rollout_path FROM threads`)
 	if err != nil {
 		return nil
@@ -54,16 +56,18 @@ func loadFromStateDB(dbPath string) []Session {
 	var sessions []Session
 	for rows.Next() {
 		var s Session
-		var title, cwd, model, reasoning, cli, rollout sql.NullString
+		var title, source, provider, cwd, model, reasoning, cli, rollout sql.NullString
 		var created, updated, tokens sql.NullInt64
 		var archived int64
-		if err := rows.Scan(&s.ID, &title, &created, &updated,
+		if err := rows.Scan(&s.ID, &title, &created, &updated, &source, &provider,
 			&cwd, &model, &reasoning, &tokens, &archived, &cli, &rollout); err != nil {
 			continue
 		}
 		s.Title = orString(title, "(无标题)")
 		s.CreatedAt = normalizeEpoch(created.Int64)
 		s.UpdatedAt = normalizeEpoch(updated.Int64)
+		s.Source = source.String
+		s.ModelProvider = provider.String
 		s.CWD = cwd.String
 		s.Model = model.String
 		s.ReasoningEffort = reasoning.String
@@ -83,6 +87,8 @@ type rolloutMeta struct {
 	Payload struct {
 		ID         string `json:"id"`
 		Timestamp  string `json:"timestamp"`
+		Source     string `json:"source"`
+		Provider   string `json:"model_provider"`
 		CWD        string `json:"cwd"`
 		CliVersion string `json:"cli_version"`
 	} `json:"payload"`
@@ -90,10 +96,9 @@ type rolloutMeta struct {
 
 func loadFromRolloutFiles() []Session {
 	sessionsDir := filepath.Join(codexHome(), "sessions")
-	matches, err := filepath.Glob(filepath.Join(sessionsDir, "**", "rollout-*.jsonl"))
-	if err != nil {
-		return nil
-	}
+	matches := walkFiles(sessionsDir, func(name string) bool {
+		return filepath.Ext(name) == ".jsonl" && len(name) > len("rollout-") && name[:len("rollout-")] == "rollout-"
+	})
 	var sessions []Session
 	for _, path := range matches {
 		meta, ok := readRolloutMeta(path)
@@ -106,14 +111,16 @@ func loadFromRolloutFiles() []Session {
 			title = "(无标题)"
 		}
 		sessions = append(sessions, Session{
-			ID:          meta.Payload.ID,
-			Title:       title,
-			CreatedAt:   created,
-			UpdatedAt:   created,
-			CWD:         meta.Payload.CWD,
-			CliVersion:  meta.Payload.CliVersion,
-			RolloutPath: path,
-			Tool:        ToolCodex,
+			ID:            meta.Payload.ID,
+			Title:         title,
+			CreatedAt:     created,
+			UpdatedAt:     created,
+			Source:        meta.Payload.Source,
+			ModelProvider: meta.Payload.Provider,
+			CWD:           meta.Payload.CWD,
+			CliVersion:    meta.Payload.CliVersion,
+			RolloutPath:   path,
+			Tool:          ToolCodex,
 		})
 	}
 	return sessions

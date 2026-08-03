@@ -21,10 +21,10 @@ const (
 // loadClaude returns Claude Code sessions across all project dirs.
 func loadClaude() ([]Session, string) {
 	projectsDir := filepath.Join(claudeHome(), "projects")
-	matches, err := filepath.Glob(filepath.Join(projectsDir, "**", "*.jsonl"))
-	if err != nil {
+	if fi, err := os.Stat(projectsDir); err != nil || !fi.IsDir() {
 		return nil, ""
 	}
+	matches := walkFiles(projectsDir, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
 	names := claudeSessionNames()
 	var sessions []Session
 	for _, path := range matches {
@@ -32,7 +32,7 @@ func loadClaude() ([]Session, string) {
 			sessions = append(sessions, *s)
 		}
 	}
-	return sessions, "projects/"
+	return sessions, projectsDir + string(filepath.Separator)
 }
 
 // claudeSessionNames reads ~/.claude/sessions/*.json, which carries a friendly

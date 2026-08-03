@@ -9,6 +9,8 @@ package server
 //
 //	tool         repeatable; codex | claude | pi | opencode (default: all)
 //	q            substring filter over cwd and title
+//	cwd          substring filter over cwd only
+//	source       substring filter over source (Codex only)
 //	since        unix ms, YYYY-MM-DD, ISO-8601, or relative like 7d/12h/30m
 //	archived     0 (default) hides archived, 1 shows only archived, absent = both
 //	sort         updated (default) | created
@@ -115,6 +117,8 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		Tools:    tools,
 		Archived: archived,
 		Q:        q.Get("q"),
+		CWD:      q.Get("cwd"),
+		Source:   q.Get("source"),
 		Since:    since,
 		Sort:     sortKey,
 		Limit:    limit,

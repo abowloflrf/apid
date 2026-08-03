@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // pi sessions are per-cwd JSONL transcripts under ~/.pi/agent/sessions. The
@@ -25,6 +26,9 @@ func messageText(content any) string {
 				continue
 			}
 			if t, ok := m["text"].(string); ok {
+				if b.Len() > 0 {
+					b.WriteByte(' ')
+				}
 				b.WriteString(t)
 			}
 		}
@@ -49,17 +53,17 @@ func piEntryTime(entry map[string]any) int64 {
 // loadPi returns sessions from the pi agent's JSONL transcripts.
 func loadPi() ([]Session, string) {
 	sessionsDir := filepath.Join(piHome(), "sessions")
-	matches, err := filepath.Glob(filepath.Join(sessionsDir, "**", "*.jsonl"))
-	if err != nil {
+	if fi, err := os.Stat(sessionsDir); err != nil || !fi.IsDir() {
 		return nil, ""
 	}
+	matches := walkFiles(sessionsDir, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
 	var sessions []Session
 	for _, path := range matches {
 		if s := scanPiSession(path); s != nil {
 			sessions = append(sessions, *s)
 		}
 	}
-	return sessions, "sessions/"
+	return sessions, sessionsDir + string(filepath.Separator)
 }
 
 func scanPiSession(path string) *Session {
@@ -143,7 +147,7 @@ func scanPiSession(path string) *Session {
 		if i := strings.LastIndexByte(stem, '_'); i > 0 {
 			stem = stem[:i]
 		}
-		createdAt = parseISO(stem)
+		createdAt = parsePiFilenameTime(stem)
 		if createdAt == 0 && len(stem) >= 10 {
 			createdAt = parseISO(stem[:10])
 		}
@@ -159,21 +163,39 @@ func scanPiSession(path string) *Session {
 	if model != "" && provider != "" && !strings.Contains(model, "/") {
 		model = provider + "/" + model
 	}
-	title = strings.TrimSpace(title)
-	if title == "" {
+	if name = strings.TrimSpace(name); name != "" {
 		title = name
+	} else {
+		title = strings.TrimSpace(title)
 	}
 	if title == "" {
 		title = "(无标题)"
 	}
 	return &Session{
-		ID:          sessionID,
-		Title:       title,
-		CreatedAt:   createdAt,
-		UpdatedAt:   updatedAt,
-		CWD:         cwd,
-		Model:       model,
-		RolloutPath: path,
-		Tool:        ToolPi,
+		ID:            sessionID,
+		Title:         title,
+		CreatedAt:     createdAt,
+		UpdatedAt:     updatedAt,
+		ModelProvider: provider,
+		CWD:           cwd,
+		Model:         model,
+		RolloutPath:   path,
+		Tool:          ToolPi,
 	}
+}
+
+func parsePiFilenameTime(value string) int64 {
+	if len(value) >= len("2006-01-02T15-04-05Z") && value[10] == 'T' {
+		normalized := []byte(value)
+		if normalized[13] == '-' && normalized[16] == '-' {
+			normalized[13], normalized[16] = ':', ':'
+			if len(normalized) > 20 && normalized[19] == '-' {
+				normalized[19] = '.'
+			}
+			if parsed, err := time.Parse(time.RFC3339Nano, string(normalized)); err == nil {
+				return parsed.UnixMilli()
+			}
+		}
+	}
+	return parseISO(value)
 }

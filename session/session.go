@@ -9,8 +9,10 @@ package session
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -30,6 +32,8 @@ type Session struct {
 	Title            string   `json:"title"`
 	CreatedAt        int64    `json:"created_at_ms"`
 	UpdatedAt        int64    `json:"updated_at_ms"`
+	Source           string   `json:"source"`
+	ModelProvider    string   `json:"model_provider"`
 	CWD              string   `json:"cwd"`
 	Model            string   `json:"model"`
 	ReasoningEffort  string   `json:"reasoning_effort"`
@@ -125,9 +129,34 @@ func stateVersion(name string) int {
 
 func homeOr(env, fallback string) string {
 	if v := os.Getenv(env); v != "" {
-		return v
+		return resolvePath(v)
 	}
 	return fallback
+}
+
+func resolvePath(path string) string {
+	path = expandUser(path)
+	if absolute, err := filepath.Abs(path); err == nil {
+		return absolute
+	}
+	return path
+}
+
+func userHome() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return os.Getenv("HOME")
+}
+
+func expandUser(path string) string {
+	if path == "~" {
+		return userHome()
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, `~\`) {
+		return filepath.Join(userHome(), path[2:])
+	}
+	return path
 }
 
 func fileExists(p string) bool {

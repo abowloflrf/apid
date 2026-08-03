@@ -156,6 +156,8 @@ export interface AgentSession {
   title: string;
   created_at_ms: number;
   updated_at_ms: number;
+  source: string;
+  model_provider: string;
   cwd: string;
   model: string;
   reasoning_effort: string;
