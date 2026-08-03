@@ -64,6 +64,7 @@ export function RequestModal({ request, onClose }: Props) {
           {dRow("Upstream model", modelDot(r.upstream_model))}
           {dRow("Upstream URL", r.upstream_url ? <span className="d-mono">{r.upstream_url}</span> : <span className="muted">—</span>)}
           {dRow("User-Agent", r.client_ua ? <span className="d-mono">{r.client_ua}</span> : <span className="muted">—</span>)}
+          {r.session_id && dRow("Session ID", <span className="d-mono">{r.session_id}</span>)}
           <div className="d-sec">Status &amp; timing</div>
           {dRow("Status", <>{statusPill(r.client_status)} <span className="d-arrow">→</span> {statusPill(r.upstream_status)}</>)}
           {dRow("Duration", fmtDur(r.duration_ms))}

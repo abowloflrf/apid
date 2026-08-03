@@ -332,6 +332,7 @@ type RequestRow struct {
 	UpstreamModel  string `json:"upstream_model"`
 	UpstreamURL    string `json:"upstream_url"`
 	ClientUA       string `json:"client_ua"`
+	SessionID      string `json:"session_id,omitempty"`
 	Stream         bool   `json:"stream"`
 	ClientStatus   int    `json:"client_status"`
 	UpstreamStatus int    `json:"upstream_status"`
@@ -356,7 +357,7 @@ func QueryRequests(db *sql.DB, f Filter, errorsOnly bool, limit, offset int) ([]
 		offset = 0
 	}
 	q := `SELECT time, duration_ms, ttft_ms, client_protocol, client_model,
-        upstream_model, upstream_url, client_ua, stream, client_status,
+		upstream_model, upstream_url, client_ua, COALESCE(session_id, ''), stream, client_status,
         upstream_status, input_tokens, output_tokens, cached_tokens,
         total_tokens, COALESCE(error, '') FROM requests` + where +
 		" ORDER BY time DESC LIMIT ? OFFSET ?"
@@ -377,7 +378,7 @@ func QueryRequests(db *sql.DB, f Filter, errorsOnly bool, limit, offset int) ([]
 		)
 		if err := rows.Scan(
 			&r.Time, &r.DurationMs, &ttft, &r.ClientProtocol, &r.ClientModel,
-			&r.UpstreamModel, &r.UpstreamURL, &r.ClientUA, &stream, &r.ClientStatus,
+			&r.UpstreamModel, &r.UpstreamURL, &r.ClientUA, &r.SessionID, &stream, &r.ClientStatus,
 			&r.UpstreamStatus, &r.InputTokens, &r.OutputTokens, &r.CachedTokens,
 			&r.TotalTokens, &r.Error,
 		); err != nil {

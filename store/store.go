@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS requests (
     client_path       TEXT    NOT NULL,
     client_model      TEXT    NOT NULL,
     client_ua         TEXT    NOT NULL DEFAULT '',
+    session_id        TEXT,
     upstream_protocol TEXT    NOT NULL,
     upstream_url      TEXT    NOT NULL,
     upstream_model    TEXT    NOT NULL,
@@ -83,8 +84,64 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: apply schema failed: %w", err)
 	}
+	if err := ensureRequestColumns(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: migrate requests failed: %w", err)
+	}
 
 	return &Store{db: db, path: path}, nil
+}
+
+// ensureRequestColumns adds columns introduced after the initial schema. The
+// CREATE TABLE above only handles new databases; existing tables need explicit
+// ALTER TABLE migrations.
+func ensureRequestColumns(db *sql.DB) error {
+	const (
+		column = "session_id"
+		alter  = "ALTER TABLE requests ADD COLUMN session_id TEXT"
+	)
+	exists, err := requestColumnExists(db, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.Exec(alter); err != nil {
+		// Another process may have added the column after our check.
+		exists, checkErr := requestColumnExists(db, column)
+		if checkErr == nil && exists {
+			return nil
+		}
+		return fmt.Errorf("add %s: %w", column, err)
+	}
+	return nil
+}
+
+func requestColumnExists(db *sql.DB, want string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(requests)")
+	if err != nil {
+		return false, fmt.Errorf("inspect columns: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid         int
+			name, typ   string
+			notNull, pk int
+			defaultVal  sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultVal, &pk); err != nil {
+			return false, fmt.Errorf("scan columns: %w", err)
+		}
+		if name == want {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("inspect columns: %w", err)
+	}
+	return false, nil
 }
 
 // Enabled 表示是否真的打开了数据库。

@@ -32,6 +32,7 @@ func seedServer(t *testing.T) *Server {
 	r.Record(stats.Record{
 		Time: now, Duration: 200 * time.Millisecond, TTFT: 40 * time.Millisecond,
 		ClientProtocol: "openai_responses", ClientPath: "/r", ClientModel: "m", ClientStatus: 200,
+		SessionID:        "session-123",
 		UpstreamProtocol: "openai_chat_completions", UpstreamURL: "u", UpstreamModel: "gpt-x",
 		UpstreamStatus: 200, Stream: true,
 		Usage: &stats.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CachedTokens: 20},
@@ -106,6 +107,24 @@ func TestDashboardRequestsErrorsOnly(t *testing.T) {
 	if len(rows) != 1 || rows[0].Error != "boom" {
 		t.Fatalf("errors-only rows = %+v, want single boom", rows)
 	}
+}
+
+func TestDashboardRequestsIncludesSessionID(t *testing.T) {
+	h := seedServer(t).Handler()
+	req := httptest.NewRequest("GET", "/stats/requests", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	var rows []stats.RequestRow
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, row := range rows {
+		if row.SessionID == "session-123" {
+			return
+		}
+	}
+	t.Fatalf("session_id missing from rows: %+v", rows)
 }
 
 // The specific API patterns must outrank the /stats/ file-server subtree.

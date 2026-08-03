@@ -255,6 +255,9 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 
 	bodyBytes, err := readLimited(r.Body, maxRequestBody)
 	if err != nil {
+		if s.recorder != nil {
+			stat.SessionID = extractAgentSessionID(r.Header, nil)
+		}
 		if err == errBodyTooLarge {
 			stat.Error = "request body exceeds size limit"
 			writeError(rec, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
@@ -269,6 +272,9 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 	_ = json.Unmarshal(bodyBytes, &sniff)
 	stat.ClientModel = sniff.Model
 	stat.Stream = sniff.Stream
+	if s.recorder != nil {
+		stat.SessionID = extractAgentSessionID(r.Header, bodyBytes)
+	}
 
 	// Non-streaming requests get a hard cap so a hung upstream can't pin a
 	// goroutine forever. Streaming requests stay uncapped (see newTransport).

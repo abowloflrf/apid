@@ -28,6 +28,7 @@ func TestRecorderRoundTrip(t *testing.T) {
 			Time: now, Duration: 100 * time.Millisecond,
 			ClientProtocol: "openai_responses",
 			ClientPath:     "/v1/responses", ClientModel: "gpt-x",
+			SessionID:    "session-123",
 			ClientStatus: 200, Stream: false,
 			UpstreamProtocol: "openai_chat_completions",
 			UpstreamURL:      "https://api.example.com/v1/chat/completions",
@@ -52,7 +53,7 @@ func TestRecorderRoundTrip(t *testing.T) {
 
 	rows, err := st.DB().Query(`SELECT
 		time, duration_ms,
-		client_protocol, client_path, client_model,
+		client_protocol, client_path, client_model, IFNULL(session_id, ''),
 		upstream_protocol, upstream_url, upstream_model,
 		stream, client_status, upstream_status,
 		input_tokens, output_tokens, total_tokens, cached_tokens,
@@ -66,11 +67,11 @@ func TestRecorderRoundTrip(t *testing.T) {
 	var count int
 	for rows.Next() {
 		var (
-			timeStr, cPath, cModel, upURL, upModel, cProto, upProto, errStr         string
-			duration, cStatus, upStatus, stream, inTok, outTok, totalTok, cachedTok int
+			timeStr, cPath, cModel, sessionID, upURL, upModel, cProto, upProto, errStr string
+			duration, cStatus, upStatus, stream, inTok, outTok, totalTok, cachedTok    int
 		)
 		if err := rows.Scan(&timeStr, &duration,
-			&cProto, &cPath, &cModel,
+			&cProto, &cPath, &cModel, &sessionID,
 			&upProto, &upURL, &upModel,
 			&stream, &cStatus, &upStatus,
 			&inTok, &outTok, &totalTok, &cachedTok,
@@ -82,6 +83,12 @@ func TestRecorderRoundTrip(t *testing.T) {
 		}
 		if upProto != "openai_chat_completions" {
 			t.Errorf("upstream_protocol = %q, want openai_chat_completions", upProto)
+		}
+		if count == 0 && sessionID != "session-123" {
+			t.Errorf("session_id = %q, want session-123", sessionID)
+		}
+		if count == 1 && sessionID != "" {
+			t.Errorf("second session_id = %q, want empty", sessionID)
 		}
 		count++
 	}

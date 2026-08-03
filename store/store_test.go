@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +69,55 @@ func TestSchemaIdempotent(t *testing.T) {
 	var x int
 	if err := s2.DB().QueryRow("SELECT 1").Scan(&x); err != nil {
 		t.Errorf("query after reopen failed: %v", err)
+	}
+}
+
+func TestOpenMigratesSessionIDColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySchema := strings.Replace(schema, "    session_id        TEXT,\n", "", 1)
+	if legacySchema == schema {
+		t.Fatal("legacy schema fixture still contains session_id")
+	}
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO requests (
+		time, duration_ms, client_protocol, client_path, client_model,
+		upstream_protocol, upstream_url, upstream_model, stream, client_status
+	) VALUES ('2025-01-01T00:00:00Z', 1, 'openai_responses', '/v1/responses', 'client-model',
+		'openai_responses', 'https://example.com/v1/responses', 'upstream-model', 0, 200)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open legacy database failed: %v", err)
+	}
+	defer st.Close()
+
+	exists, err := requestColumnExists(st.DB(), "session_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("session_id column was not added")
+	}
+	var (
+		model     string
+		sessionID sql.NullString
+	)
+	if err := st.DB().QueryRow("SELECT client_model, session_id FROM requests").Scan(&model, &sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if model != "client-model" || sessionID.Valid {
+		t.Errorf("migrated row = model %q, session %v; want preserved model and NULL session", model, sessionID)
 	}
 }
 

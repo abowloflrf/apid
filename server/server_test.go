@@ -282,8 +282,10 @@ func TestStatsRecorded(t *testing.T) {
 	srv := New(convertRoute(up.URL, ""), st, nil)
 	defer srv.Close()
 
-	body := `{"model":"gpt-x","input":"你好"}`
+	body := `{"model":"gpt-x","input":"你好","client_metadata":{"session_id":"flat-session","thread_id":"codex-thread","x-codex-turn-metadata":"{\"session_id\":\"codex-session\"}"}}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("session-id", "header-session")
+	req.Header.Set("thread-id", "codex-thread")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
@@ -295,15 +297,15 @@ func TestStatsRecorded(t *testing.T) {
 	srv.Close()
 
 	row := st.DB().QueryRow(`SELECT
-		client_model, upstream_url, upstream_model, stream,
+		client_model, upstream_url, upstream_model, COALESCE(session_id, ''), stream,
 		client_status, upstream_status,
 		input_tokens, output_tokens, total_tokens, cached_tokens
 		FROM requests LIMIT 1`)
 	var (
-		cModel, upURL, upModel                                        string
+		cModel, upURL, upModel, sessionID                             string
 		stream, cStatus, upStatus, inTok, outTok, totalTok, cachedTok int
 	)
-	if err := row.Scan(&cModel, &upURL, &upModel, &stream, &cStatus, &upStatus,
+	if err := row.Scan(&cModel, &upURL, &upModel, &sessionID, &stream, &cStatus, &upStatus,
 		&inTok, &outTok, &totalTok, &cachedTok); err != nil {
 		t.Fatalf("read back row failed: %v", err)
 	}
@@ -312,6 +314,9 @@ func TestStatsRecorded(t *testing.T) {
 	}
 	if upModel != "gpt-x" {
 		t.Errorf("upstream_model = %q, want gpt-x (未配置覆盖时透传)", upModel)
+	}
+	if sessionID != "codex-session" {
+		t.Errorf("session_id = %q, want codex-session", sessionID)
 	}
 	if !strings.HasSuffix(upURL, "/chat/completions") {
 		t.Errorf("upstream_url = %q, 应以 /chat/completions 结尾", upURL)

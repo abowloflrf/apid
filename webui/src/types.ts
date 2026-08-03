@@ -69,6 +69,7 @@ export interface RequestRow {
   total_tokens: number;
   upstream_url?: string;
   error?: string;
+  session_id?: string;
 }
 
 export interface Options {

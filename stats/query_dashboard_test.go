@@ -25,7 +25,7 @@ func seedDashboard(t *testing.T) *sql.DB {
 
 	rec1 := Record{
 		Time: day1, ClientProtocol: "openai_chat_completions", ClientPath: "/c",
-		ClientModel: "m", ClientStatus: 200, ClientUA: "ua-1",
+		ClientModel: "m", ClientStatus: 200, ClientUA: "ua-1", SessionID: "session-a",
 		UpstreamProtocol: "openai_chat_completions", UpstreamURL: "u", UpstreamModel: "a",
 		UpstreamStatus: 200, Stream: true,
 		Duration: 100 * time.Millisecond, TTFT: 20 * time.Millisecond,
@@ -259,6 +259,9 @@ func TestQueryRequests(t *testing.T) {
 	}
 	if streamRow == nil || streamRow.TTFTMs == nil {
 		t.Fatal("expected a stream row with a non-nil TTFT")
+	}
+	if streamRow.SessionID != "session-a" {
+		t.Errorf("stream session_id = %q, want session-a", streamRow.SessionID)
 	}
 
 	errsOnly, err := QueryRequests(db, Filter{}, true, 0, 0)
