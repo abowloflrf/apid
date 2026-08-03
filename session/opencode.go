@@ -79,10 +79,14 @@ func loadOpenCodeDB(dbPath string) []Session {
 			return nil
 		}
 	}
-	selected := []string{"id", "directory", "title", "time_created", "time_updated",
-		"time_archived", "version", "agent", "model"}
-	tokenCols := []string{"cost", "tokens_input", "tokens_output", "tokens_reasoning",
-		"tokens_cache_read", "tokens_cache_write"}
+	selected := []string{
+		"id", "directory", "title", "time_created", "time_updated",
+		"time_archived", "version", "agent", "model",
+	}
+	tokenCols := []string{
+		"cost", "tokens_input", "tokens_output", "tokens_reasoning",
+		"tokens_cache_read", "tokens_cache_write",
+	}
 	have := map[string]bool{}
 	for _, c := range cols {
 		have[c] = true

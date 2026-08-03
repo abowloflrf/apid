@@ -195,9 +195,7 @@ func writeBatch(db *sql.DB, records []Record) error {
 	defer stmt.Close()
 
 	for _, rec := range records {
-		var (
-			inputTok, outputTok, totalTok, cachedTok int
-		)
+		var inputTok, outputTok, totalTok, cachedTok int
 		if rec.Usage != nil {
 			inputTok = rec.Usage.InputTokens
 			outputTok = rec.Usage.OutputTokens

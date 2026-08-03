@@ -106,19 +106,36 @@ func layoutForWidth(width int) tableLayout {
 	switch {
 	case width >= 128:
 		return makeLayout(width,
-			[]table.Column{{Title: "时间", Width: 16}, {Title: "T", Width: 2}, {Title: "ID", Width: 8},
-				{Title: "模型", Width: 20}, {Title: "工作目录", Width: 18}, {Title: "Tokens", Width: 7},
-				{Title: "缓存", Width: 7}},
+			[]table.Column{
+				{Title: "时间", Width: 16},
+				{Title: "T", Width: 2},
+				{Title: "ID", Width: 8},
+				{Title: "模型", Width: 20},
+				{Title: "工作目录", Width: 18},
+				{Title: "Tokens", Width: 7},
+				{Title: "缓存", Width: 7},
+			},
 			[]tableField{fieldTime, fieldTool, fieldID, fieldModel, fieldCWD, fieldTokens, fieldCache})
 	case width >= 94:
 		return makeLayout(width,
-			[]table.Column{{Title: "时间", Width: 16}, {Title: "T", Width: 2}, {Title: "模型", Width: 18},
-				{Title: "工作目录", Width: 16}, {Title: "Tokens", Width: 7}, {Title: "缓存", Width: 7}},
+			[]table.Column{
+				{Title: "时间", Width: 16},
+				{Title: "T", Width: 2},
+				{Title: "模型", Width: 18},
+				{Title: "工作目录", Width: 16},
+				{Title: "Tokens", Width: 7},
+				{Title: "缓存", Width: 7},
+			},
 			[]tableField{fieldTime, fieldTool, fieldModel, fieldCWD, fieldTokens, fieldCache})
 	case width >= 70:
 		return makeLayout(width,
-			[]table.Column{{Title: "时间", Width: 16}, {Title: "T", Width: 2}, {Title: "模型", Width: 16},
-				{Title: "Tokens", Width: 7}, {Title: "缓存", Width: 6}},
+			[]table.Column{
+				{Title: "时间", Width: 16},
+				{Title: "T", Width: 2},
+				{Title: "模型", Width: 16},
+				{Title: "Tokens", Width: 7},
+				{Title: "缓存", Width: 6},
+			},
 			[]tableField{fieldTime, fieldTool, fieldModel, fieldTokens, fieldCache})
 	default:
 		return makeLayout(width,

@@ -187,8 +187,10 @@ func (r *blockingReader) Read(p []byte) (int, error) {
 	select {} // no ctx: block forever (misconfigured test)
 }
 
-const completedResponsesChunk = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
-const deltaResponsesChunk = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
+const (
+	completedResponsesChunk = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
+	deltaResponsesChunk     = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"
+)
 
 func TestForwardSSE_CompletedClientGone(t *testing.T) {
 	// Stream completes, then ctx is cancelled at the next loop-top check (point 1).
