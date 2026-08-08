@@ -241,7 +241,7 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("Location", "stats/")
 		w.WriteHeader(http.StatusMovedPermanently)
 	})
-	return s.withClientAuth(mux)
+	return s.withAccessLog(s.withClientAuth(mux))
 }
 
 // handleRoute is the shared orchestration: read body, sniff model, resolve the
@@ -261,25 +261,14 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		ClientPath:     clientPath,
 		ClientUA:       r.UserAgent(),
 	}
+	if access := accessLogFromContext(r.Context()); access != nil {
+		access.route = rt.Path
+		access.forward = &stat
+	}
 	defer func() {
 		stat.Duration = time.Since(start)
 		stat.ClientStatus = rec.statusCode()
 		s.recorder.Record(stat)
-	}()
-	defer func() {
-		attrs := []any{
-			"method", r.Method, "path", r.URL.Path,
-			"model", stat.ClientModel, "stream", stat.Stream,
-			"upstream_url", stat.UpstreamURL, "upstream_model", stat.UpstreamModel,
-			"upstream_status", stat.UpstreamStatus, "status", rec.statusCode(),
-			"duration", time.Since(start).Round(time.Millisecond),
-		}
-		if u := stat.Usage; u != nil {
-			attrs = append(attrs, slog.Group("usage",
-				"input", u.InputTokens, "output", u.OutputTokens, "total", u.TotalTokens,
-				"cache_read", u.CachedTokens, "cache_creation", u.CacheCreationTokens))
-		}
-		s.log.Info("access", attrs...)
 	}()
 
 	upstreamReq := r
@@ -793,32 +782,6 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
-
-// respRecorder 包装 http.ResponseWriter，记录最终写出的状态码用于 access log。
-type respRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *respRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *respRecorder) statusCode() int {
-	if r.status == 0 {
-		return http.StatusOK
-	}
-	return r.status
-}
-
-func (r *respRecorder) Flush() {
-	if f, ok := r.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (r *respRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 type sseWriter struct {
 	w http.ResponseWriter
