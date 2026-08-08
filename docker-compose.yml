@@ -12,6 +12,8 @@ services:
     image: apid:latest
     container_name: apid
     restart: unless-stopped
+    # Keep the runtime deadline above APID_SHUTDOWN_TIMEOUT (default 120s).
+    stop_grace_period: 130s
     # Run as the host user so the bind-mounted ./data is writable (the image's
     # default non-root uid 10001 wouldn't own the host dir).
     user: "1000:1000"
@@ -24,6 +26,8 @@ services:
       TZ: Asia/Shanghai
       # Listen address; with host networking this binds straight to the host.
       APID_LISTEN: ":19092"
+      # Graceful HTTP shutdown timeout.
+      APID_SHUTDOWN_TIMEOUT: "120s"
       # Collect token/perf metrics into SQLite. Persisted via the volume below.
       APID_DB: "/app/data/apid.db"
       # Trace dumping stays off by default (zero overhead). To enable, set

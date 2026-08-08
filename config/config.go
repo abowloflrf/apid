@@ -53,6 +53,7 @@ type Config struct {
 	Listen              string        // APID_LISTEN
 	TraceDir            string        // APID_TRACE_DIR / APID_TRACE; empty = off
 	DB                  string        // APID_DB; empty = off
+	ShutdownTimeout     time.Duration // APID_SHUTDOWN_TIMEOUT; defaults to 120s
 	ClientAPIKey        string        // client_api_key in TOML; empty = no inbound client auth
 	StatsAPIKey         string        // stats_api_key in TOML; empty = /stats(*) dashboard stays open
 	CodexSSEIdleTimeout time.Duration // APID_CODEX_SSE_IDLE_TIMEOUT; defaults to 5m
@@ -202,11 +203,16 @@ func Load(configPath string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	shutdownTimeout, err := durationEnv("APID_SHUTDOWN_TIMEOUT", 120*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Listen:              env("APID_LISTEN", ":19092"),
 		TraceDir:            traceDir,
 		DB:                  env("APID_DB", ""),
+		ShutdownTimeout:     shutdownTimeout,
 		ClientAPIKey:        fc.ClientAPIKey,
 		StatsAPIKey:         fc.StatsAPIKey,
 		CodexSSEIdleTimeout: codexSSEIdleTimeout,

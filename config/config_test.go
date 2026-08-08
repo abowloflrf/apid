@@ -511,6 +511,7 @@ func isolateEnv(t *testing.T) {
 	t.Setenv("APID_DB", "")
 	t.Setenv("APID_TRACE", "")
 	t.Setenv("APID_TRACE_DIR", "")
+	t.Setenv("APID_SHUTDOWN_TIMEOUT", "")
 	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "")
 }
 
@@ -525,6 +526,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.DB != "" || cfg.TraceDir != "" {
 		t.Errorf("DB=%q TraceDir=%q, want both empty", cfg.DB, cfg.TraceDir)
+	}
+	if cfg.ShutdownTimeout != 120*time.Second {
+		t.Errorf("ShutdownTimeout = %s, want 120s", cfg.ShutdownTimeout)
 	}
 	if cfg.CodexSSEIdleTimeout != 5*time.Minute {
 		t.Errorf("CodexSSEIdleTimeout = %s, want 5m", cfg.CodexSSEIdleTimeout)
@@ -628,6 +632,27 @@ func TestLoadCodexSSEIdleTimeout(t *testing.T) {
 	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "invalid")
 	if _, err := Load(writeTOML(t, minimalTOML)); err == nil {
 		t.Fatal("invalid APID_CODEX_SSE_IDLE_TIMEOUT should fail")
+	}
+}
+
+func TestLoadShutdownTimeout(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_SHUTDOWN_TIMEOUT", "45s")
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ShutdownTimeout != 45*time.Second {
+		t.Fatalf("ShutdownTimeout = %s, want 45s", cfg.ShutdownTimeout)
+	}
+
+	for _, value := range []string{"invalid", "0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("APID_SHUTDOWN_TIMEOUT", value)
+			if _, err := Load(writeTOML(t, minimalTOML)); err == nil {
+				t.Fatalf("APID_SHUTDOWN_TIMEOUT=%q should fail", value)
+			}
+		})
 	}
 }
 

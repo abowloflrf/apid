@@ -44,6 +44,7 @@ Ops params (environment variables; ./.env is loaded first, real env vars take pr
   APID_TRACE_DIR  directory for TRACE dumps; takes precedence when set
   APID_TRACE      when truthy (1/true/yes/on), dump TRACE to ./logs (default off)
   APID_DB         SQLite database file path; records request metrics async when set (empty = off)
+  APID_SHUTDOWN_TIMEOUT       graceful HTTP shutdown timeout (default 120s)
   APID_CODEX_SSE_IDLE_TIMEOUT  Codex subscription SSE idle timeout (default 5m)
 
 Stats (read-only, only when APID_DB is set):
@@ -119,7 +120,8 @@ func run(logger *slog.Logger, configPath string) error {
 	go func() { errCh <- httpServer.ListenAndServe() }()
 
 	logger.Info("apid started", "listen", cfg.Listen,
-		"upstreams", len(cfg.Upstreams), "routes", len(cfg.Routes))
+		"upstreams", len(cfg.Upstreams), "routes", len(cfg.Routes),
+		"shutdown_timeout", cfg.ShutdownTimeout)
 	for _, u := range cfg.Upstreams {
 		attrs := []any{"name", u.Name, "endpoint", u.BaseURL + u.Path, "protocol", u.Protocol}
 		if u.SupportsResponses {
@@ -140,12 +142,16 @@ func run(logger *slog.Logger, configPath string) error {
 		_ = st.Close()
 		return fmt.Errorf("http server: %w", err)
 	case <-ctx.Done():
-		logger.Info("shutdown signal received, stopping server")
+		stop()
+		logger.Info("shutdown signal received, stopping server", "timeout", cfg.ShutdownTimeout)
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-	_ = httpServer.Shutdown(shutdownCtx)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("graceful shutdown incomplete", "err", err)
+		_ = httpServer.Close()
+	}
 	srv.Close()
 	if err := st.Close(); err != nil {
 		logger.Warn("store close", "err", err)

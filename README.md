@@ -28,6 +28,11 @@ Config uses `[[upstream]]` (backends, referenced by `name`) and `[[route]]`
 (public paths + `model` dispatch rules). Env vars live in `.env` (see
 `.env.example`); full syntax in `config.example.toml`.
 
+Graceful shutdown waits up to 120 seconds for in-flight HTTP requests by
+default. Set `APID_SHUTDOWN_TIMEOUT` to another positive Go duration, such as
+`30s` or `3m`, when the surrounding process supervisor allows at least that
+long before forcefully terminating apid.
+
 Providers that natively speak both OpenAI protocols only need one upstream:
 set `supports_responses = true` on an `openai_chat_completions` upstream (and
 optionally `responses_path`). A `openai_responses` route hitting it then

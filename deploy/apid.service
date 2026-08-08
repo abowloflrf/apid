@@ -19,6 +19,8 @@ WorkingDirectory=/etc/apid
 
 Restart=on-failure
 RestartSec=2s
+# Keep the supervisor deadline above APID_SHUTDOWN_TIMEOUT (default 120s).
+TimeoutStopSec=130s
 
 # Hardening
 NoNewPrivileges=true
