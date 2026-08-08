@@ -38,7 +38,7 @@ To protect the gateway itself, set a top-level `client_api_key` in
 `config.toml`. When set, clients must send it as `Authorization: Bearer ...`,
 `X-Api-Key`, or `Api-Key`. This inbound key is stripped before forwarding; the
 upstream credential remains `[[upstream]].api_key` (Anthropic uses `X-Api-Key`).
-Only forwarding routes require it; `/healthz` stays open.
+Only forwarding routes require it; `/healthz` and `/api/hello` stay open.
 
 ## Experimental Codex subscription proxy
 
@@ -188,7 +188,9 @@ repeatable/comma-separated `model` & `protocol`):
 | `GET /stats/daily` | per-day aggregation for Grafana Infinity |
 | `GET /stats/topology` | loaded routes/upstreams graph, secrets redacted (needs no `APID_DB`) |
 
-Also `GET /healthz`.
+Also `GET /healthz`, plus unauthenticated `GET`/`HEAD /api/hello` for Claude
+Code provider preflight checks. `/api/hello` is answered locally and never
+calls an upstream model.
 
 ## Test
 

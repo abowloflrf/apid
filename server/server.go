@@ -34,6 +34,8 @@ const nonStreamTimeout = 300 * time.Second
 
 const subscriptionRequestBodyReadTimeout = 60 * time.Second
 
+const helloResponse = `{"message":"hello"}`
+
 // target is a resolved upstream: its config plus a bound forwarding client,
 // shared across every route/model rule that references it.
 type target struct {
@@ -215,6 +217,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("GET /api/hello", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(helloResponse)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = io.WriteString(w, helloResponse)
+		}
 	})
 	mux.HandleFunc("GET /stats/daily", s.handleStatsDaily)
 	// Interactive dashboard: JSON API + the embedded UI. The specific /stats/*
@@ -443,8 +453,8 @@ func (s *Server) withClientAuth(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The health probe stays open so load balancers/uptime probes work.
-		if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
+		// Local probes stay open so clients can check availability before auth.
+		if isPublicProbe(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -470,6 +480,14 @@ func (s *Server) withClientAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isPublicProbe(r *http.Request) bool {
+	if r.URL.Path == "/healthz" {
+		return r.Method == http.MethodGet
+	}
+	return r.URL.Path == "/api/hello" &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead)
 }
 
 func hasSingleBearerAuthorization(h http.Header) bool {

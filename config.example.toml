@@ -21,7 +21,7 @@
 # X-Api-Key: <key>, or Api-Key: <key>. This key is never forwarded upstream.
 # Codex subscription routes are the exception: they accept the local key only
 # as X-Apid-Key because Authorization carries the client's OpenAI credential.
-# Only forwarding routes require it; /healthz and /stats(/*) stay open.
+# Only forwarding routes require it; /healthz, /api/hello, and /stats(/*) stay open.
 # client_api_key = "apid-local-static-key"
 
 # Optional key for the read-only dashboard and its JSON API (GET /stats,
