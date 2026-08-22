@@ -9,7 +9,8 @@
 #
 # Conversion happens when a route's input_protocol differs from the matched
 # upstream's protocol (currently only openai_responses -> openai_chat_completions).
-# Equal protocols = pure forward (bytes passed through, metrics still collected).
+# Equal protocols = forward without conversion. Chat streams force
+# stream_options.include_usage=true so metrics receive exact token usage.
 # An upstream with protocol = "openai_chat_completions" and
 # supports_responses = true also serves OpenAI Responses natively: responses
 # routes hitting it forward raw bytes to its responses endpoint instead of

@@ -7,7 +7,7 @@
 是否做协议转换 = 入口 `input_protocol` 与所选 upstream `protocol` 是否相等:
 
 - **两端不同**:仅支持 Responses → Chat Completions 转换;反向 `chat → responses` 配置加载时报错。
-- **两端相同**:原样转发字节,仅采集 model/stream/token/TTFT 指标(upstream 配 `model` 才改写 body)。
+- **两端相同**:原样转发字节,仅采集 model/stream/token/TTFT 指标;upstream 配 `model` 时改写 model,Chat 流式请求强制注入 `stream_options.include_usage=true`。
 - **双协议透传**:chat upstream 配 `supports_responses = true` 时,同一后端也接受 responses 入口,直接透传(`responses_path` 留空由 `path` 推导),供应商两种协议都支持时不用写两份 upstream。
 
 协议枚举:`openai_responses`、`openai_chat_completions`、`anthropic_messages`。

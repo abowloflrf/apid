@@ -75,23 +75,32 @@ func readLimited(r io.Reader, max int64) ([]byte, error) {
 	return body, nil
 }
 
-// forwardRaw handles a same-protocol route: forward the body verbatim, only
-// rewriting model when ex.model is non-empty. stat.ClientModel/Stream are
-// already filled by handleRoute.
+// forwardRaw handles a same-protocol route. It rewrites the model when
+// configured and requests final usage for Chat streams; all other fields pass
+// through unchanged. stat.ClientModel/Stream are already filled by handleRoute.
 func (s *Server) forwardRaw(ex *exchange) {
 	fwdBody := ex.body
 	if ex.model != "" {
-		b, err := overrideModel(ex.body, ex.model)
+		b, err := overrideModel(fwdBody, ex.model)
 		if err != nil {
 			ex.stat.Error = "override model: " + err.Error()
 			writeError(ex.w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
 			return
 		}
 		fwdBody = b
-		if ex.trace != nil {
-			if path := ex.trace.Dump("upstream", fwdBody); path != "" {
-				s.log.Info("trace upstream request", "file", path)
-			}
+	}
+	if ex.proto == config.ProtoChat && ex.stat.Stream {
+		b, err := forceChatStreamUsage(fwdBody)
+		if err != nil {
+			ex.stat.Error = "inject stream usage: " + err.Error()
+			writeError(ex.w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+			return
+		}
+		fwdBody = b
+	}
+	if ex.trace != nil && (ex.model != "" || ex.proto == config.ProtoChat && ex.stat.Stream) {
+		if path := ex.trace.Dump("upstream", fwdBody); path != "" {
+			s.log.Info("trace upstream request", "file", path)
 		}
 	}
 
@@ -244,6 +253,35 @@ func overrideModel(body []byte, model string) ([]byte, error) {
 	}
 	m["model"] = mb
 	return json.Marshal(m)
+}
+
+// forceChatStreamUsage makes the final Chat SSE usage chunk available to both
+// the client and apid's metrics collector while preserving other stream options.
+func forceChatStreamUsage(body []byte) ([]byte, error) {
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, err
+	}
+	if request == nil {
+		return nil, fmt.Errorf("request body must be a JSON object")
+	}
+
+	options := make(map[string]json.RawMessage)
+	if raw, ok := request["stream_options"]; ok {
+		if err := json.Unmarshal(raw, &options); err != nil {
+			return nil, fmt.Errorf("stream_options must be a JSON object: %w", err)
+		}
+		if options == nil {
+			options = make(map[string]json.RawMessage)
+		}
+	}
+	options["include_usage"] = json.RawMessage("true")
+	rawOptions, err := json.Marshal(options)
+	if err != nil {
+		return nil, err
+	}
+	request["stream_options"] = rawOptions
+	return json.Marshal(request)
 }
 
 // extractUsage 按输出协议从非流式响应体里抽取 usage。

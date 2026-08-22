@@ -331,9 +331,15 @@ func TestForwardRawPreservesQuery(t *testing.T) {
 	}
 }
 
-// TestForwardChatStream：chat->chat 纯转发流式，断言 SSE 原样 + usage + TTFT>0 + stream=1。
+// TestForwardChatStream：chat->chat 流式转发，断言注入 usage、SSE 原样 + TTFT>0 + stream=1。
 func TestForwardChatStream(t *testing.T) {
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var gotRequest struct {
+		StreamOptions map[string]json.RawMessage `json:"stream_options"`
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotRequest); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		chunks := []string{
@@ -368,6 +374,9 @@ func TestForwardChatStream(t *testing.T) {
 	if !strings.Contains(out, "data: [DONE]") {
 		t.Errorf("缺 [DONE]: %s", out)
 	}
+	if got := string(gotRequest.StreamOptions["include_usage"]); got != "true" {
+		t.Errorf("上游 include_usage = %s, want true", got)
+	}
 
 	var stream, inTok, totalTok int
 	var ttft *int
@@ -383,6 +392,41 @@ func TestForwardChatStream(t *testing.T) {
 	}
 	if ttft == nil || *ttft < 0 {
 		t.Errorf("ttft_ms 应有非负值, got %v", ttft)
+	}
+}
+
+func TestForceChatStreamUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing options", body: `{"model":"gpt-x","stream":true}`},
+		{name: "override false", body: `{"stream":true,"stream_options":{"include_usage":false}}`},
+		{name: "preserve other options", body: `{"stream":true,"stream_options":{"include_obfuscation":false}}`},
+		{name: "replace null", body: `{"stream":true,"stream_options":null}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := forceChatStreamUsage([]byte(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request struct {
+				StreamOptions map[string]json.RawMessage `json:"stream_options"`
+			}
+			if err := json.Unmarshal(out, &request); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(request.StreamOptions["include_usage"]); got != "true" {
+				t.Errorf("include_usage = %s, want true", got)
+			}
+			if tt.name == "preserve other options" {
+				if got := string(request.StreamOptions["include_obfuscation"]); got != "false" {
+					t.Errorf("include_obfuscation = %s, want false", got)
+				}
+			}
+		})
 	}
 }
 

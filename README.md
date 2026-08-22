@@ -1,7 +1,8 @@
 # apid
 
-Local LLM API gateway. Routes by path: same protocol = pure forward, different
-protocol = conversion (currently Responses → Chat Completions). Supports OpenAI
+Local LLM API gateway. Routes by path: same protocol = forward, different
+protocol = conversion (currently Responses → Chat Completions). Streaming Chat
+forwards force `stream_options.include_usage=true` for metrics. Supports OpenAI
 Chat / Responses / Anthropic Messages.
 
 ```
