@@ -12,7 +12,7 @@ RUN pnpm build
 # ---- build stage ----
 # Run on the builder's native arch and cross-compile, so multi-platform
 # builds never compile Go under QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.7 AS build
 WORKDIR /src
 
 # Cache modules first
