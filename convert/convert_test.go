@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,27 @@ type failingSink struct{ err error }
 
 func (s failingSink) Write([]byte) (int, error) { return 0, s.err }
 func (s failingSink) Flush()                    {}
+
+func parseSSEPayloads(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	var payloads []map[string]any
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &payload); err != nil {
+			t.Fatalf("decode SSE payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan SSE payloads: %v", err)
+	}
+	return payloads
+}
 
 func TestRequestTools(t *testing.T) {
 	body := `{
@@ -537,6 +559,121 @@ func TestStreamCreatedAndInProgress(t *testing.T) {
 	// 收尾事件也应带 created_at。
 	if tail := out[strings.Index(out, "event: response.completed"):]; !strings.Contains(tail, `"created_at":`) {
 		t.Errorf("response.completed 缺少 created_at, 输出:\n%s", out)
+	}
+}
+
+func TestStreamSequenceNumbersAndKeyFields(t *testing.T) {
+	raw := "data: " + `{"choices":[{"delta":{"content":"hi"}}]}` + "\n\n" +
+		"data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
+		t.Fatal(err)
+	}
+	payloads := parseSSEPayloads(t, s.b.String())
+	if len(payloads) == 0 {
+		t.Fatal("expected SSE payloads")
+	}
+	for i, payload := range payloads {
+		if got := int(payload["sequence_number"].(float64)); got != i+1 {
+			t.Fatalf("payload %d sequence_number = %d, want %d", i, got, i+1)
+		}
+	}
+	created := payloads[0]["response"].(map[string]any)
+	for _, key := range []string{"background", "error", "incomplete_details", "usage"} {
+		if _, ok := created[key]; !ok {
+			t.Errorf("response.created missing %q", key)
+		}
+	}
+	var textDelta map[string]any
+	for _, payload := range payloads {
+		if payload["type"] == "response.output_text.delta" {
+			textDelta = payload
+			break
+		}
+	}
+	if textDelta == nil {
+		t.Fatal("missing response.output_text.delta")
+	}
+	if _, ok := textDelta["logprobs"]; !ok {
+		t.Error("response.output_text.delta missing logprobs")
+	}
+}
+
+func TestStreamClosesItemsBeforeNextType(t *testing.T) {
+	chunks := []string{
+		`{"choices":[{"delta":{"reasoning_content":"think"}}]}`,
+		`{"choices":[{"delta":{"content":"answer"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+	}
+	raw := "data: " + strings.Join(chunks, "\n\ndata: ") + "\n\ndata: [DONE]\n\n"
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
+		t.Fatal(err)
+	}
+	payloads := parseSSEPayloads(t, s.b.String())
+	eventIndex := func(eventType string, outputIndex int) int {
+		for i, payload := range payloads {
+			if payload["type"] == eventType && int(payload["output_index"].(float64)) == outputIndex {
+				return i
+			}
+		}
+		return -1
+	}
+	reasoningDone := eventIndex("response.output_item.done", 0)
+	messageAdded := eventIndex("response.output_item.added", 1)
+	messageDone := eventIndex("response.output_item.done", 1)
+	toolAdded := eventIndex("response.output_item.added", 2)
+	if reasoningDone < 0 || messageAdded < 0 || reasoningDone > messageAdded {
+		t.Fatalf("reasoning item must close before message starts:\n%s", s.b.String())
+	}
+	if messageDone < 0 || toolAdded < 0 || messageDone > toolAdded {
+		t.Fatalf("message item must close before tool starts:\n%s", s.b.String())
+	}
+}
+
+func TestStreamPrematureEOFIsFailure(t *testing.T) {
+	raw := "data: " + `{"choices":[{"delta":{"content":"partial"}}]}` + "\n\n"
+	var s sink
+	_, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
+	if err == nil {
+		t.Fatal("premature EOF should return an error")
+	}
+	out := s.b.String()
+	if !strings.Contains(out, "event: response.failed") {
+		t.Fatalf("premature EOF should emit response.failed:\n%s", out)
+	}
+	if strings.Contains(out, "event: response.completed") {
+		t.Fatalf("premature EOF must not emit response.completed:\n%s", out)
+	}
+}
+
+func TestStreamEOFAfterFinishReasonIsCompatible(t *testing.T) {
+	raw := "data: " + `{"choices":[{"delta":{"content":"done"}}]}` + "\n\n" +
+		"data: " + `{"choices":[{"delta":{},"finish_reason":"stop"}]}` + "\n\n"
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err != nil {
+		t.Fatalf("EOF after finish_reason should remain compatible: %v", err)
+	}
+	if !strings.Contains(s.b.String(), "event: response.completed") {
+		t.Fatalf("missing response.completed:\n%s", s.b.String())
+	}
+}
+
+func TestStreamReasoningOnlyIsFailure(t *testing.T) {
+	raw := "data: " + `{"choices":[{"delta":{"reasoning_content":"unfinished thought"}}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var s sink
+	_, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil)
+	if err == nil {
+		t.Fatal("reasoning-only stream should return an error")
+	}
+	out := s.b.String()
+	if !strings.Contains(out, "event: response.failed") {
+		t.Fatalf("reasoning-only stream should emit response.failed:\n%s", out)
+	}
+	if strings.Contains(out, "event: response.completed") {
+		t.Fatalf("reasoning-only stream must not emit response.completed:\n%s", out)
 	}
 }
 

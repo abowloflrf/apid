@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/abowloflrf/apid/config"
 	"github.com/abowloflrf/apid/protocol"
@@ -321,6 +323,82 @@ func TestStreaming(t *testing.T) {
 	}
 	if fullText.String() != "你好世界" {
 		t.Errorf("拼接文本 = %q, 期望 你好世界", fullText.String())
+	}
+}
+
+func TestStreamingFlushesDeltaBeforeUpstreamCompletes(t *testing.T) {
+	releaseUpstream := make(chan struct{})
+	upstreamCompleted := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseUpstream:
+		default:
+			close(releaseUpstream)
+		}
+	}()
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		_, _ = io.WriteString(w, "data: "+`{"choices":[{"delta":{"content":"first"}}]}`+"\n\n")
+		flusher.Flush()
+		select {
+		case <-releaseUpstream:
+		case <-r.Context().Done():
+			return
+		}
+		_, _ = io.WriteString(w, "data: "+`{"choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		close(upstreamCompleted)
+	}))
+	defer up.Close()
+
+	gateway := httptest.NewServer(newTestServer(up.URL))
+	defer gateway.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gateway.URL+"/v1/responses",
+		strings.NewReader(`{"model":"gpt-x","input":"hello","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	var observed strings.Builder
+	for !strings.Contains(observed.String(), `"type":"response.output_text.delta"`) {
+		line, readErr := reader.ReadString('\n')
+		observed.WriteString(line)
+		if readErr != nil {
+			t.Fatalf("read before first delta: %v, output:\n%s", readErr, observed.String())
+		}
+	}
+	select {
+	case <-upstreamCompleted:
+		t.Fatal("upstream completed before the client observed the first delta")
+	default:
+	}
+	close(releaseUpstream)
+	rest, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed.Write(rest)
+	if !strings.Contains(observed.String(), "event: response.completed") {
+		t.Fatalf("missing terminal event:\n%s", observed.String())
 	}
 }
 

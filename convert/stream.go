@@ -48,6 +48,7 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		w: w, model: model, tools: map[int]*toolState{},
 		namespaces: namespaces, responseID: respID,
 		createdAt: time.Now().Unix(),
+		outputs:   make([]any, 0),
 	}
 
 	// 开场两连发：response.created → response.in_progress，两者携带同一个
@@ -67,6 +68,7 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 	// tool-call argument delta — can't overflow a fixed token limit and kill
 	// the stream. Same reading strategy as the raw forwarding path.
 	reader := bufio.NewReader(body)
+	sawDone := false
 	for {
 		line, readErr := reader.ReadString('\n')
 		// Client gone (disconnect / shutdown): checked between read and process
@@ -78,6 +80,7 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		if data, ok := strings.CutPrefix(line, "data:"); ok {
 			data = strings.TrimSpace(data)
 			if data == "[DONE]" {
+				sawDone = true
 				break
 			}
 			// Upstream reported an error mid-stream: emit response.failed to
@@ -103,6 +106,14 @@ func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, mod
 		}
 	}
 
+	if !sawDone && st.finishReason == "" {
+		st.failConversion(errors.New("upstream stream closed before [DONE]"))
+		return st.result()
+	}
+	if st.reasoningText.Len() > 0 && st.textBuf.Len() == 0 && len(st.tools) == 0 {
+		st.failConversion(errors.New("upstream stream ended with reasoning but no answer or tool call"))
+		return st.result()
+	}
 	st.finish()
 	return st.result()
 }
@@ -154,21 +165,25 @@ type streamState struct {
 	createdAt  int64
 	usage      *protocol.ChatUsage
 	err        error
+	sequence   int
 
 	firstTokenAt time.Time
 	finishReason string
 
 	nextIndex int
+	outputs   []any
 
 	// reasoning item
-	reasoningOpen  bool
-	reasoningIndex int
-	reasoningText  strings.Builder
+	reasoningOpen    bool
+	reasoningStarted bool
+	reasoningIndex   int
+	reasoningText    strings.Builder
 
 	// message(文本) item
-	textOpen  bool
-	textIndex int
-	textBuf   strings.Builder
+	textOpen    bool
+	textStarted bool
+	textIndex   int
+	textBuf     strings.Builder
 
 	// function_call items
 	tools     map[int]*toolState
@@ -194,7 +209,7 @@ func (st *streamState) openingResponse() map[string]any {
 	return map[string]any{
 		"id": st.responseID, "object": "response", "created_at": st.createdAt,
 		"status": "in_progress", "model": st.model, "output": []any{},
-		"usage": nil,
+		"background": false, "error": nil, "incomplete_details": nil, "usage": nil,
 	}
 }
 
@@ -218,17 +233,35 @@ func (st *streamState) handleDelta(d protocol.ChatChunkDelta) {
 	if d.ReasoningContent != "" {
 		st.handleReasoning(d.ReasoningContent)
 	}
+	if st.err != nil {
+		return
+	}
 	if d.Content != "" {
 		st.handleText(d.Content)
 	}
+	if st.err != nil {
+		return
+	}
 	for _, tc := range d.ToolCalls {
 		st.handleToolCall(tc)
+		if st.err != nil {
+			return
+		}
 	}
 }
 
 func (st *streamState) handleReasoning(delta string) {
+	if st.reasoningStarted && !st.reasoningOpen {
+		st.failConversion(errors.New("reasoning delta arrived after the reasoning item was closed"))
+		return
+	}
+	if st.textStarted || len(st.tools) > 0 {
+		st.failConversion(errors.New("reasoning delta arrived after answer or tool output started"))
+		return
+	}
 	if !st.reasoningOpen {
 		st.reasoningOpen = true
+		st.reasoningStarted = true
 		st.reasoningIndex = st.nextIndex
 		st.nextIndex++
 		st.emit("response.output_item.added", map[string]any{
@@ -254,8 +287,21 @@ func (st *streamState) handleReasoning(delta string) {
 }
 
 func (st *streamState) handleText(delta string) {
+	if len(st.tools) > 0 {
+		st.failConversion(errors.New("text delta arrived after tool output started"))
+		return
+	}
+	st.finishReasoning()
+	if st.err != nil {
+		return
+	}
+	if st.textStarted && !st.textOpen {
+		st.failConversion(errors.New("text delta arrived after the message item was closed"))
+		return
+	}
 	if !st.textOpen {
 		st.textOpen = true
+		st.textStarted = true
 		st.textIndex = st.nextIndex
 		st.nextIndex++
 		st.emit("response.output_item.added", map[string]any{
@@ -268,17 +314,22 @@ func (st *streamState) handleText(delta string) {
 		st.emit("response.content_part.added", map[string]any{
 			"type": "response.content_part.added", "item_id": st.textItemID(),
 			"output_index": st.textIndex, "content_index": 0,
-			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+			"part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}, "logprobs": []any{}},
 		})
 	}
 	st.textBuf.WriteString(delta)
 	st.emit("response.output_text.delta", map[string]any{
 		"type": "response.output_text.delta", "item_id": st.textItemID(),
-		"output_index": st.textIndex, "content_index": 0, "delta": delta,
+		"output_index": st.textIndex, "content_index": 0, "delta": delta, "logprobs": []any{},
 	})
 }
 
 func (st *streamState) handleToolCall(tc protocol.ChatToolCall) {
+	st.finishReasoning()
+	st.finishText()
+	if st.err != nil {
+		return
+	}
 	idx := 0
 	if tc.Index != nil {
 		idx = *tc.Index
@@ -315,53 +366,10 @@ func (st *streamState) handleToolCall(tc protocol.ChatToolCall) {
 }
 
 func (st *streamState) finish() {
-	outputs := make([]any, st.nextIndex)
-
-	if st.reasoningOpen {
-		text := st.reasoningText.String()
-		st.emit("response.reasoning_summary_text.done", map[string]any{
-			"type": "response.reasoning_summary_text.done", "item_id": st.reasoningItemID(),
-			"output_index": st.reasoningIndex, "summary_index": 0, "text": text,
-		})
-		// 关 summary part 槽位：与文本路径的 content_part.done 对称。
-		st.emit("response.reasoning_summary_part.done", map[string]any{
-			"type": "response.reasoning_summary_part.done", "item_id": st.reasoningItemID(),
-			"output_index": st.reasoningIndex, "summary_index": 0,
-			"part": map[string]any{"type": "summary_text", "text": text},
-		})
-		item := map[string]any{
-			"id": st.reasoningItemID(), "type": "reasoning", "status": "completed",
-			"summary": []any{map[string]any{"type": "summary_text", "text": text}},
-		}
-		st.emit("response.output_item.done", map[string]any{
-			"type": "response.output_item.done", "output_index": st.reasoningIndex, "item": item,
-		})
-		outputs[st.reasoningIndex] = item
-	}
-
-	if st.textOpen {
-		text := st.textBuf.String()
-		st.emit("response.output_text.done", map[string]any{
-			"type": "response.output_text.done", "item_id": st.textItemID(),
-			"output_index": st.textIndex, "content_index": 0, "text": text,
-		})
-		part := map[string]any{"type": "output_text", "text": text, "annotations": []any{}}
-		st.emit("response.content_part.done", map[string]any{
-			"type": "response.content_part.done", "item_id": st.textItemID(),
-			"output_index": st.textIndex, "content_index": 0, "part": part,
-		})
-		itemStatus := statusCompleted
-		if s, _ := mapFinishReason(st.finishReason); s == statusIncomplete {
-			itemStatus = statusIncomplete
-		}
-		item := map[string]any{
-			"id": st.textItemID(), "type": "message", "status": itemStatus,
-			"role": "assistant", "content": []any{part},
-		}
-		st.emit("response.output_item.done", map[string]any{
-			"type": "response.output_item.done", "output_index": st.textIndex, "item": item,
-		})
-		outputs[st.textIndex] = item
+	st.finishReasoning()
+	st.finishText()
+	if st.err != nil {
+		return
 	}
 
 	for _, idx := range st.toolOrder {
@@ -375,13 +383,17 @@ func (st *streamState) finish() {
 		st.emit("response.output_item.done", map[string]any{
 			"type": "response.output_item.done", "output_index": ts.outputIndex, "item": item,
 		})
-		outputs[ts.outputIndex] = item
+		st.storeOutput(ts.outputIndex, item)
+	}
+	if st.err != nil {
+		return
 	}
 
 	status, incompleteReason := mapFinishReason(st.finishReason)
 	resp := map[string]any{
 		"id": st.responseID, "object": "response", "created_at": st.createdAt,
-		"status": status, "model": st.model, "output": outputs,
+		"status": status, "model": st.model, "output": st.outputs,
+		"background": false, "error": nil, "incomplete_details": nil, "usage": nil,
 	}
 	if incompleteReason != "" {
 		resp["incomplete_details"] = map[string]any{"reason": incompleteReason}
@@ -407,6 +419,73 @@ func (st *streamState) finish() {
 	st.emit(event, map[string]any{"type": event, "response": resp})
 }
 
+func (st *streamState) finishReasoning() {
+	if !st.reasoningOpen {
+		return
+	}
+	text := st.reasoningText.String()
+	st.emit("response.reasoning_summary_text.done", map[string]any{
+		"type": "response.reasoning_summary_text.done", "item_id": st.reasoningItemID(),
+		"output_index": st.reasoningIndex, "summary_index": 0, "text": text,
+	})
+	st.emit("response.reasoning_summary_part.done", map[string]any{
+		"type": "response.reasoning_summary_part.done", "item_id": st.reasoningItemID(),
+		"output_index": st.reasoningIndex, "summary_index": 0,
+		"part": map[string]any{"type": "summary_text", "text": text},
+	})
+	item := map[string]any{
+		"id": st.reasoningItemID(), "type": "reasoning", "status": "completed",
+		"summary": []any{map[string]any{"type": "summary_text", "text": text}},
+	}
+	st.emit("response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "output_index": st.reasoningIndex, "item": item,
+	})
+	if st.err != nil {
+		return
+	}
+	st.reasoningOpen = false
+	st.storeOutput(st.reasoningIndex, item)
+}
+
+func (st *streamState) finishText() {
+	if !st.textOpen {
+		return
+	}
+	text := st.textBuf.String()
+	st.emit("response.output_text.done", map[string]any{
+		"type": "response.output_text.done", "item_id": st.textItemID(),
+		"output_index": st.textIndex, "content_index": 0, "text": text, "logprobs": []any{},
+	})
+	part := map[string]any{"type": "output_text", "text": text, "annotations": []any{}, "logprobs": []any{}}
+	st.emit("response.content_part.done", map[string]any{
+		"type": "response.content_part.done", "item_id": st.textItemID(),
+		"output_index": st.textIndex, "content_index": 0, "part": part,
+	})
+	itemStatus := statusCompleted
+	if s, _ := mapFinishReason(st.finishReason); s == statusIncomplete {
+		itemStatus = statusIncomplete
+	}
+	item := map[string]any{
+		"id": st.textItemID(), "type": "message", "status": itemStatus,
+		"role": "assistant", "content": []any{part},
+	}
+	st.emit("response.output_item.done", map[string]any{
+		"type": "response.output_item.done", "output_index": st.textIndex, "item": item,
+	})
+	if st.err != nil {
+		return
+	}
+	st.textOpen = false
+	st.storeOutput(st.textIndex, item)
+}
+
+func (st *streamState) storeOutput(index int, item any) {
+	for len(st.outputs) <= index {
+		st.outputs = append(st.outputs, nil)
+	}
+	st.outputs[index] = item
+}
+
 // result 从 streamState 构造 StreamResult，供调用方回写 reasoning 缓存。
 func (st *streamState) result() (*StreamResult, error) {
 	var callIDs []string
@@ -428,15 +507,23 @@ func (st *streamState) fail(message string) {
 	resp := map[string]any{
 		"id": st.responseID, "object": "response", "created_at": st.createdAt,
 		"status": statusFailed, "model": st.model, "output": []any{},
+		"background": false, "incomplete_details": nil, "usage": nil,
 		"error": map[string]any{"code": "upstream_error", "message": message},
 	}
 	st.emit("response.failed", map[string]any{"type": "response.failed", "response": resp})
 }
 
-func (st *streamState) emit(event string, payload any) {
+func (st *streamState) failConversion(err error) {
+	st.fail(err.Error())
+	st.err = errors.Join(err, st.err)
+}
+
+func (st *streamState) emit(event string, payload map[string]any) {
 	if st.err != nil {
 		return
 	}
+	st.sequence++
+	payload["sequence_number"] = st.sequence
 	st.err = emit(st.w, event, payload)
 }
 
