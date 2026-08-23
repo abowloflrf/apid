@@ -54,7 +54,7 @@ go run .                  # 启动
 
 ## 关键约定与不变量
 
-- **字段映射**细节见 `convert/*.go` 注释。要点:`developer` 经 `mapRole` 归一为 `system`;`reasoning_content` 是 DeepSeek/vLLM 事实标准字段(OpenAI 官方 Chat 无此字段),面向兼容上游。
+- **字段映射**细节见 `convert/*.go` 注释。要点:`developer` 经 `mapRole` 归一为 `user`,兼容不支持该角色的 Chat 上游;`reasoning_content` 是 DeepSeek/vLLM 事实标准字段(OpenAI 官方 Chat 无此字段),面向兼容上游。
 - **流式不变量**:`streamState` 三类增量(文本/reasoning/tool_calls)各自惰性开项,保持 **added → delta → done 配对完整**,否则客户端解析失败。
 - **字段覆盖范围**:已支持文本、工具调用、reasoning;未覆盖图片/文件输入、内置工具、annotations、多模态、`previous_response_id` 多轮状态。
 

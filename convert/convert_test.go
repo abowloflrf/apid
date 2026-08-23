@@ -414,7 +414,7 @@ func TestRequestContentBlockArray(t *testing.T) {
 }
 
 func TestRequestDeveloperRole(t *testing.T) {
-	// Responses 的 "developer" 角色 Chat Completions 不认，应归一为 "system"。
+	// Not all Chat Completions providers accept the developer role, so use user.
 	body := `{"model":"m","input":[{"role":"developer","content":"开发者指令"}]}`
 	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
@@ -424,8 +424,71 @@ func TestRequestDeveloperRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chat.Messages) != 1 || chat.Messages[0].Role != "system" {
-		t.Errorf("developer 角色未归一为 system: %+v", chat.Messages)
+	if len(chat.Messages) != 1 || chat.Messages[0].Role != "user" {
+		t.Errorf("developer 角色未归一为 user: %+v", chat.Messages)
+	}
+}
+
+func TestRequestDefersMessagesUntilToolOutputs(t *testing.T) {
+	body := `{"model":"m","instructions":"base","input":[
+      {"type":"function_call","call_id":"c1","name":"one","arguments":"{}"},
+      {"type":"function_call","call_id":"c2","name":"two","arguments":"{}"},
+      {"role":"developer","content":"developer update"},
+      {"type":"function_call_output","call_id":"c1","output":"one done"},
+      {"role":"user","content":"approval saved"},
+      {"type":"function_call_output","call_id":"c2","output":"two done"},
+      {"role":"user","content":"next"}
+    ]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(chat.Messages) != 7 {
+		t.Fatalf("消息数 = %d, 期望 7: %+v", len(chat.Messages), chat.Messages)
+	}
+	if chat.Messages[0].Role != "system" || chat.Messages[0].Content != "base" {
+		t.Fatalf("base instructions 未保留在首位: %+v", chat.Messages)
+	}
+	if chat.Messages[1].Role != "assistant" || len(chat.Messages[1].ToolCalls) != 2 {
+		t.Fatalf("并行工具调用未合并: %+v", chat.Messages[1])
+	}
+	if chat.Messages[2].Role != "tool" || chat.Messages[2].ToolCallID != "c1" ||
+		chat.Messages[3].Role != "tool" || chat.Messages[3].ToolCallID != "c2" {
+		t.Fatalf("tool output 未保持邻接: %+v", chat.Messages)
+	}
+	if chat.Messages[4].Role != "user" || chat.Messages[4].Content != "developer update" ||
+		chat.Messages[5].Role != "user" || chat.Messages[5].Content != "approval saved" ||
+		chat.Messages[6].Role != "user" || chat.Messages[6].Content != "next" {
+		t.Fatalf("延迟消息未按原顺序释放: %+v", chat.Messages)
+	}
+}
+
+func TestRequestDoesNotDeferMessagesWithoutToolOutput(t *testing.T) {
+	body := `{"model":"m","instructions":"base","input":[
+      {"type":"function_call","call_id":"c1","name":"one","arguments":"{}"},
+      {"role":"developer","content":"developer update"},
+      {"role":"user","content":"next"}
+    ]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(chat.Messages) != 4 {
+		t.Fatalf("消息数 = %d, 期望 4: %+v", len(chat.Messages), chat.Messages)
+	}
+	if chat.Messages[2].Role != "user" || chat.Messages[2].Content != "developer update" ||
+		chat.Messages[3].Role != "user" || chat.Messages[3].Content != "next" {
+		t.Fatalf("无 tool output 时消息顺序不对: %+v", chat.Messages)
 	}
 }
 

@@ -202,12 +202,34 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 		return nil, fmt.Errorf("parse input: %w", err)
 	}
 
+	outputCallIDs := make(map[string]struct{})
+	for _, it := range items {
+		if it.Type == "function_call_output" && it.CallID != "" {
+			outputCallIDs[it.CallID] = struct{}{}
+		}
+	}
+
 	out := make([]protocol.ChatMessage, 0, len(items))
 	// pendingReasoning 暂存上一条 reasoning 输入项的摘要，仅作缓存未命中时的兜底；
 	// reasoning 回传优先取网关缓存里的原文（Codex 重放的 reasoning 不可靠）。
 	pendingReasoning := ""
 	// toolMsg 指向当前正在累积工具调用的 assistant 消息，连续 function_call 合并进同一条。
 	var toolMsg *protocol.ChatMessage
+	// Providers commonly require assistant(tool_calls) and matching tool outputs to be adjacent.
+	// Defer intervening messages only when a matching output exists later in this request.
+	awaitingToolOutputs := make(map[string]struct{})
+	deferredMessages := make([]protocol.ChatMessage, 0)
+	appendRegularMessage := func(msg protocol.ChatMessage) {
+		if len(awaitingToolOutputs) > 0 {
+			deferredMessages = append(deferredMessages, msg)
+			return
+		}
+		out = append(out, msg)
+	}
+	flushDeferredMessages := func() {
+		out = append(out, deferredMessages...)
+		deferredMessages = deferredMessages[:0]
+	}
 
 	for _, it := range items {
 		if it.Type != "function_call" {
@@ -242,6 +264,9 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				toolMsg = &out[len(out)-1]
 			}
 			toolMsg.ToolCalls = append(toolMsg.ToolCalls, call)
+			if _, ok := outputCallIDs[it.CallID]; ok {
+				awaitingToolOutputs[it.CallID] = struct{}{}
+			}
 
 		case "function_call_output":
 			out = append(out, protocol.ChatMessage{
@@ -249,6 +274,10 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				ToolCallID: it.CallID,
 				Content:    extractText(it.Output),
 			})
+			delete(awaitingToolOutputs, it.CallID)
+			if len(awaitingToolOutputs) == 0 {
+				flushDeferredMessages()
+			}
 
 		case "reasoning":
 			pendingReasoning = summaryText(it.Summary)
@@ -266,10 +295,11 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				msg.ReasoningContent = rc
 				pendingReasoning = ""
 			}
-			out = append(out, msg)
+			appendRegularMessage(msg)
 		}
 	}
 
+	flushDeferredMessages()
 	return out, nil
 }
 
@@ -297,10 +327,10 @@ func summaryText(summary []protocol.SummaryText) string {
 	return b.String()
 }
 
-// mapRole 把 Responses 消息角色映射为 Chat Completions 支持的角色。
+// mapRole maps Responses roles to roles accepted by broadly compatible Chat providers.
 func mapRole(role string) string {
 	if role == "developer" {
-		return "system"
+		return "user"
 	}
 	return role
 }
@@ -325,30 +355,4 @@ func extractText(raw json.RawMessage) string {
 		}
 	}
 	return b.String()
-}
-
-// FixSystemOrdering 修正 system/developer 消息被 Codex 插在 function_call 和
-// function_call_output 之间导致的顺序问题。Chat Completions API 要求
-// assistant[tool_calls] → tool 必须连续，中间不能有 system 消息。
-// 被插队的 system 消息移到 messages[0]（替换已有 system 或插在最前面）。
-func FixSystemOrdering(messages []protocol.ChatMessage) []protocol.ChatMessage {
-	if len(messages) <= 1 {
-		return messages
-	}
-
-	// 从前往后扫描，把 index > 0 且 role == "system" 的消息移到最前面。
-	var cleaned []protocol.ChatMessage
-	for i, m := range messages {
-		if i > 0 && m.Role == "system" {
-			// 替换 messages[0] 如果它已经是 system，否则 insert。
-			if len(cleaned) > 0 && cleaned[0].Role == "system" {
-				cleaned[0] = m
-			} else {
-				cleaned = append([]protocol.ChatMessage{m}, cleaned...)
-			}
-		} else {
-			cleaned = append(cleaned, m)
-		}
-	}
-	return cleaned
 }

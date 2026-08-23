@@ -600,10 +600,6 @@ func (s *Server) convertResponsesToChat(ex *exchange) {
 		return
 	}
 
-	// 修正 system/developer 消息顺序：Codex 可能把 developer 插在
-	// function_call 与 function_call_output 之间，移到 messages[0]。
-	chatReq.Messages = convert.FixSystemOrdering(chatReq.Messages)
-
 	if ex.model != "" {
 		chatReq.Model = ex.model
 	}
