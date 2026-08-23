@@ -40,16 +40,18 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 
 	tools, namespaces := expandTools(r.Tools)
 	chat := &protocol.ChatRequest{
-		Model:             r.Model,
-		Messages:          messages,
-		Temperature:       r.Temperature,
-		TopP:              r.TopP,
-		MaxTokens:         r.MaxOutputTokens,
-		Stream:            r.Stream,
-		Tools:             tools,
-		ToolChoice:        convertToolChoice(r.ToolChoice),
-		ParallelToolCalls: r.ParallelToolCalls,
-		ResponseFormat:    convertResponseFormat(r.Text),
+		Model:          r.Model,
+		Messages:       messages,
+		Temperature:    r.Temperature,
+		TopP:           r.TopP,
+		MaxTokens:      r.MaxOutputTokens,
+		Stream:         r.Stream,
+		Tools:          tools,
+		ResponseFormat: convertResponseFormat(r.Text),
+	}
+	if len(tools) > 0 {
+		chat.ToolChoice = convertToolChoice(r.ToolChoice)
+		chat.ParallelToolCalls = r.ParallelToolCalls
 	}
 
 	if chat.Stream {

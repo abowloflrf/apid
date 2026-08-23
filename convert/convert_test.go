@@ -152,7 +152,7 @@ func TestRequestToolChoiceObjectForms(t *testing.T) {
 		`{"type":"function","name":"get_w"}`: `"function":{"name":"get_w"}`,
 	}
 	for in, want := range cases {
-		body := `{"model":"m","input":"hi","tool_choice":` + in + `}`
+		body := `{"model":"m","input":"hi","tools":[{"type":"function","name":"get_w"}],"tool_choice":` + in + `}`
 		var req protocol.ResponsesRequest
 		if err := json.Unmarshal([]byte(body), &req); err != nil {
 			t.Fatalf("input %s: %v", in, err)
@@ -168,7 +168,7 @@ func TestRequestToolChoiceObjectForms(t *testing.T) {
 }
 
 func TestRequestParallelToolCalls(t *testing.T) {
-	body := `{"model":"m","input":"hi","parallel_tool_calls":false}`
+	body := `{"model":"m","input":"hi","tools":[{"type":"function","name":"get_w"}],"parallel_tool_calls":false}`
 	var req protocol.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatal(err)
@@ -188,6 +188,38 @@ func TestRequestParallelToolCalls(t *testing.T) {
 	chat2, _, _ := ResponsesToChat(&req2, nil)
 	if chat2.ParallelToolCalls != nil {
 		t.Errorf("未提供时不应设置 parallel_tool_calls, 实际 %+v", chat2.ParallelToolCalls)
+	}
+}
+
+func TestRequestOmitsToolSettingsWithoutConvertedTools(t *testing.T) {
+	cases := map[string]string{
+		"empty tools":         `{"model":"m","input":"hi","tools":[],"tool_choice":"auto","parallel_tool_calls":false}`,
+		"unconvertible tools": `{"model":"m","input":"hi","tools":[{"type":"web_search"}],"tool_choice":"auto","parallel_tool_calls":false}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			var req protocol.ResponsesRequest
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatal(err)
+			}
+			chat, _, err := ResponsesToChat(&req, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(chat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(wire, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
+				if _, ok := fields[field]; ok {
+					t.Errorf("%s should be omitted without converted tools: %s", field, wire)
+				}
+			}
+		})
 	}
 }
 
