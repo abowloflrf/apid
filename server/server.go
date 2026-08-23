@@ -218,6 +218,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /v1/models", s.handleModels)
 	mux.HandleFunc("GET /api/hello", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Length", strconv.Itoa(len(helloResponse)))
