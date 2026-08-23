@@ -107,6 +107,66 @@ func TestNonStreaming(t *testing.T) {
 	}
 }
 
+func TestStructuredOutputResponseFormat(t *testing.T) {
+	var gotFormat *protocol.ChatResponseFormat
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		}
+		gotFormat = req.ResponseFormat
+		_ = json.NewEncoder(w).Encode(protocol.ChatResponse{
+			ID: "chatcmpl-review", Object: "chat.completion", Created: 1, Model: req.Model,
+			Choices: []protocol.ChatChoice{{
+				Message:      protocol.ChatMessage{Role: "assistant", Content: `{"outcome":"allow"}`},
+				FinishReason: "stop",
+			}},
+		})
+	}))
+	defer up.Close()
+
+	h := newTestServer(up.URL)
+	body := `{
+      "model":"reviewer",
+      "input":"review",
+      "text":{"format":{
+        "type":"json_schema",
+        "name":"codex_output_schema",
+        "strict":true,
+        "schema":{
+          "type":"object",
+          "additionalProperties":false,
+          "properties":{"outcome":{"type":"string","enum":["allow","deny"]}},
+          "required":["outcome"]
+        }
+      }}
+    }`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := json.Marshal(gotFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"json_schema","json_schema":{"name":"codex_output_schema","schema":{"type":"object","additionalProperties":false,"properties":{"outcome":{"type":"string","enum":["allow","deny"]}},"required":["outcome"]},"strict":true}}`
+	if string(got) != want {
+		t.Errorf("upstream response_format = %s, want %s", got, want)
+	}
+
+	var resp protocol.ResponsesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Output) != 1 || len(resp.Output[0].Content) != 1 ||
+		resp.Output[0].Content[0].Text != `{"outcome":"allow"}` {
+		t.Errorf("Responses output = %+v", resp.Output)
+	}
+}
+
 // TestUpstreamModelOverride 验证配置 UpstreamModel 后，转发给上游的 model 被覆盖。
 func TestUpstreamModelOverride(t *testing.T) {
 	var gotModel string

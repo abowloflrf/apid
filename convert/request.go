@@ -49,6 +49,7 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 		Tools:             tools,
 		ToolChoice:        convertToolChoice(r.ToolChoice),
 		ParallelToolCalls: r.ParallelToolCalls,
+		ResponseFormat:    convertResponseFormat(r.Text),
 	}
 
 	if chat.Stream {
@@ -60,6 +61,23 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 	}
 
 	return chat, namespaces, nil
+}
+
+func convertResponseFormat(text *protocol.ResponsesTextConfig) *protocol.ChatResponseFormat {
+	if text == nil || text.Format == nil {
+		return nil
+	}
+	format := text.Format
+	chat := &protocol.ChatResponseFormat{Type: format.Type}
+	if format.Type == "json_schema" {
+		chat.JSONSchema = &protocol.ChatJSONSchema{
+			Name:        format.Name,
+			Description: format.Description,
+			Schema:      format.Schema,
+			Strict:      format.Strict,
+		}
+	}
+	return chat
 }
 
 // NamespacedTool 记录一个命名空间工具拆解后的两部分。

@@ -6,17 +6,18 @@ import "encoding/json"
 
 // ChatRequest 对应上游 POST /v1/chat/completions 的请求体。
 type ChatRequest struct {
-	Model             string          `json:"model"`
-	Messages          []ChatMessage   `json:"messages"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
-	MaxTokens         *int            `json:"max_tokens,omitempty"`
-	Stream            bool            `json:"stream,omitempty"`
-	StreamOptions     *StreamOptions  `json:"stream_options,omitempty"`
-	Tools             []ChatTool      `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	Model             string              `json:"model"`
+	Messages          []ChatMessage       `json:"messages"`
+	Temperature       *float64            `json:"temperature,omitempty"`
+	TopP              *float64            `json:"top_p,omitempty"`
+	MaxTokens         *int                `json:"max_tokens,omitempty"`
+	Stream            bool                `json:"stream,omitempty"`
+	StreamOptions     *StreamOptions      `json:"stream_options,omitempty"`
+	Tools             []ChatTool          `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage     `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   string              `json:"reasoning_effort,omitempty"`
+	ResponseFormat    *ChatResponseFormat `json:"response_format,omitempty"`
 }
 
 // StreamOptions 对应 Chat Completions 流式请求的 stream_options。
@@ -24,6 +25,20 @@ type ChatRequest struct {
 // （choices 为空数组），否则流式默认完全不返回 token 用量。
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+// ChatResponseFormat controls plain-text or structured output generation.
+type ChatResponseFormat struct {
+	Type       string          `json:"type"`
+	JSONSchema *ChatJSONSchema `json:"json_schema,omitempty"`
+}
+
+// ChatJSONSchema is the nested Chat Completions JSON Schema configuration.
+type ChatJSONSchema struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // ChatMessage 是一条聊天消息。

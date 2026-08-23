@@ -51,6 +51,63 @@ func TestRequestTools(t *testing.T) {
 	}
 }
 
+func TestRequestResponseFormatJSONSchema(t *testing.T) {
+	body := `{
+      "model":"m",
+      "input":"review",
+      "text":{"format":{
+        "type":"json_schema",
+        "name":"codex_output_schema",
+        "description":"approval result",
+        "strict":true,
+        "schema":{
+          "type":"object",
+          "additionalProperties":false,
+          "properties":{"outcome":{"type":"string","enum":["allow","deny"]}},
+          "required":["outcome"]
+        }
+      }}
+    }`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(chat.ResponseFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"json_schema","json_schema":{"name":"codex_output_schema","description":"approval result","schema":{"type":"object","additionalProperties":false,"properties":{"outcome":{"type":"string","enum":["allow","deny"]}},"required":["outcome"]},"strict":true}}`
+	if string(got) != want {
+		t.Errorf("response_format = %s, want %s", got, want)
+	}
+}
+
+func TestRequestResponseFormatSimpleTypes(t *testing.T) {
+	for _, formatType := range []string{"text", "json_object"} {
+		body := `{"model":"m","input":"hi","text":{"format":{"type":"` + formatType + `"}}}`
+		var req protocol.ResponsesRequest
+		if err := json.Unmarshal([]byte(body), &req); err != nil {
+			t.Fatalf("%s: %v", formatType, err)
+		}
+		chat, _, err := ResponsesToChat(&req, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", formatType, err)
+		}
+		got, err := json.Marshal(chat.ResponseFormat)
+		if err != nil {
+			t.Fatalf("%s: %v", formatType, err)
+		}
+		want := `{"type":"` + formatType + `"}`
+		if string(got) != want {
+			t.Errorf("%s: response_format = %s, want %s", formatType, got, want)
+		}
+	}
+}
+
 func TestRequestToolParametersDefault(t *testing.T) {
 	// parameters 缺失 / 缺 type / 已带 type 三种情形，发给上游时都应是带 type:object 的 schema。
 	body := `{"model":"m","input":"hi","tools":[

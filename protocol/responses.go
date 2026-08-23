@@ -9,17 +9,18 @@ import "encoding/json"
 // ResponsesRequest 对应 POST /v1/responses 的请求体。
 // input / tool_choice 在官方协议里是多形态联合类型，用 json.RawMessage 延迟解析。
 type ResponsesRequest struct {
-	Model             string           `json:"model"`
-	Input             json.RawMessage  `json:"input"`
-	Instructions      string           `json:"instructions,omitempty"`
-	Temperature       *float64         `json:"temperature,omitempty"`
-	TopP              *float64         `json:"top_p,omitempty"`
-	MaxOutputTokens   *int             `json:"max_output_tokens,omitempty"`
-	Stream            bool             `json:"stream,omitempty"`
-	Tools             []ResponsesTool  `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage  `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool            `json:"parallel_tool_calls,omitempty"`
-	Reasoning         *ReasoningConfig `json:"reasoning,omitempty"`
+	Model             string               `json:"model"`
+	Input             json.RawMessage      `json:"input"`
+	Instructions      string               `json:"instructions,omitempty"`
+	Temperature       *float64             `json:"temperature,omitempty"`
+	TopP              *float64             `json:"top_p,omitempty"`
+	MaxOutputTokens   *int                 `json:"max_output_tokens,omitempty"`
+	Stream            bool                 `json:"stream,omitempty"`
+	Tools             []ResponsesTool      `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage      `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                `json:"parallel_tool_calls,omitempty"`
+	Reasoning         *ReasoningConfig     `json:"reasoning,omitempty"`
+	Text              *ResponsesTextConfig `json:"text,omitempty"`
 }
 
 // ResponsesTool 对应 tools 数组里的一项。
@@ -39,6 +40,22 @@ type ResponsesTool struct {
 type ReasoningConfig struct {
 	Effort  string `json:"effort,omitempty"`
 	Summary string `json:"summary,omitempty"`
+}
+
+// ResponsesTextConfig controls plain-text or structured output generation.
+type ResponsesTextConfig struct {
+	Format *ResponsesTextFormat `json:"format,omitempty"`
+}
+
+// ResponsesTextFormat is the Responses API shape under text.format.
+// json_schema fields are top-level here; Chat Completions nests them under
+// response_format.json_schema.
+type ResponsesTextFormat struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // InputItem 是 input 数组里的一项。它可能是：
