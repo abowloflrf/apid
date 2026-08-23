@@ -48,7 +48,7 @@ type ChatJSONSchema struct {
 // 这些形态由 UnmarshalJSON 归一(见 chat_reasoning.go)。
 type ChatMessage struct {
 	Role             string         `json:"role"`
-	Content          string         `json:"content,omitempty"`
+	Content          string         `json:"content"`
 	Refusal          string         `json:"refusal,omitempty"`
 	Name             string         `json:"name,omitempty"`
 	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`

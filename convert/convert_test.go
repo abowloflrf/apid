@@ -247,6 +247,21 @@ func TestRequestToolConversation(t *testing.T) {
 	if chat.Messages[1].ToolCalls[0].ID != "call_1" {
 		t.Errorf("call_id 未映射为 tool_call.id")
 	}
+	wire, err := json.Marshal(chat.Messages[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var message map[string]json.RawMessage
+	if err := json.Unmarshal(wire, &message); err != nil {
+		t.Fatal(err)
+	}
+	content, ok := message["content"]
+	if !ok {
+		t.Fatal("assistant tool-call message 缺少 content 字段")
+	}
+	if string(content) != `""` {
+		t.Fatalf("assistant tool-call message content = %s, 期望空字符串", content)
+	}
 	tool := chat.Messages[2]
 	if tool.Role != "tool" || tool.ToolCallID != "call_1" || tool.Content != "晴 25度" {
 		t.Errorf("function_call_output 未转成 tool 消息: %+v", tool)
