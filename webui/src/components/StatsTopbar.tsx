@@ -5,10 +5,20 @@ import { Multiselect } from "./Multiselect";
 import { Condensed } from "../views/StatsView";
 
 const RANGES: [string, string][] = [
-  ["1h", "1h"], ["6h", "6h"], ["24h", "24h"], ["today", "Today"],
-  ["7d", "7d"], ["30d", "30d"], ["all", "All"],
+  ["1h", "1h"],
+  ["6h", "6h"],
+  ["24h", "24h"],
+  ["today", "Today"],
+  ["7d", "7d"],
+  ["30d", "30d"],
+  ["all", "All"],
 ];
-const BUCKETS: [string, string][] = [["auto", "auto"], ["15min", "15m"], ["hour", "1h"], ["day", "1d"]];
+const BUCKETS: [string, string][] = [
+  ["auto", "auto"],
+  ["15min", "15m"],
+  ["hour", "1h"],
+  ["day", "1d"],
+];
 
 interface Props {
   view: string;
@@ -22,6 +32,11 @@ export function StatsTopbar({ view, onView, q, liveCount, onRefresh }: Props) {
   const [fromInput, setFromInput] = useState("");
   const [toInput, setToInput] = useState("");
   const [spinning, setSpinning] = useState(false);
+  // Mobile only (CSS-gated): the filter row starts collapsed behind a topbar
+  // toggle so the first screen shows data, not chrome.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeFilters =
+    q.models.length + q.protocols.length + (q.bucket === "auto" ? 0 : 1);
 
   // Keep the custom-range inputs in sync with preset selections.
   useEffect(() => {
@@ -64,40 +79,111 @@ export function StatsTopbar({ view, onView, q, liveCount, onRefresh }: Props) {
       <header className="topbar">
         <div className="brand">
           <span className="logo">apid</span>
-          <span className="sub" id="viewLabel">{view}</span>
+          <span className="sub" id="viewLabel">
+            {view}
+          </span>
         </div>
         <div className="seg views" id="viewTabs">
-          <button className={view === "stats" ? "active" : ""} onClick={() => onView("stats")}>stats</button>
-          <button className={view === "live" ? "active" : ""} onClick={() => onView("live")}>
-            live<span className="tab-badge" hidden={!liveCount}>{liveCount}</span>
+          <button
+            type="button"
+            className={view === "stats" ? "active" : ""}
+            onClick={() => onView("stats")}
+          >
+            stats
           </button>
-          <button className={view === "routes" ? "active" : ""} onClick={() => onView("routes")}>routes</button>
-          <button className={view === "sessions" ? "active" : ""} onClick={() => onView("sessions")}>sessions</button>
+          <button
+            type="button"
+            className={view === "live" ? "active" : ""}
+            onClick={() => onView("live")}
+          >
+            live
+            <span className="tab-badge" hidden={!liveCount}>
+              {liveCount}
+            </span>
+          </button>
+          <button
+            type="button"
+            className={view === "routes" ? "active" : ""}
+            onClick={() => onView("routes")}
+          >
+            routes
+          </button>
+          <button
+            type="button"
+            className={view === "sessions" ? "active" : ""}
+            onClick={() => onView("sessions")}
+          >
+            sessions
+          </button>
         </div>
         <div className="ranges" id="rangePresets">
           {RANGES.map(([val, label]) => (
-            <button key={val} className={q.range === val ? "active" : ""} onClick={() => applyRange(val)}>{label}</button>
+            <button
+              type="button"
+              key={val}
+              className={q.range === val ? "active" : ""}
+              onClick={() => applyRange(val)}
+            >
+              {label}
+            </button>
           ))}
         </div>
         <div className="custom-range">
-          <input type="datetime-local" title="From" value={fromInput} onChange={(e) => setFromInput(e.target.value)} onBlur={applyCustom} />
+          <input
+            type="datetime-local"
+            title="From"
+            value={fromInput}
+            onChange={(e) => setFromInput(e.target.value)}
+            onBlur={applyCustom}
+          />
           <span className="dash">→</span>
-          <input type="datetime-local" title="To" value={toInput} onChange={(e) => setToInput(e.target.value)} onBlur={applyCustom} />
+          <input
+            type="datetime-local"
+            title="To"
+            value={toInput}
+            onChange={(e) => setToInput(e.target.value)}
+            onBlur={applyCustom}
+          />
         </div>
         <div className="spacer" />
         <label className="auto" title="Auto refresh every 30s">
-          <input type="checkbox" checked={q.auto} onChange={(e) => q.setAuto(e.target.checked)} /> auto
+          <input
+            type="checkbox"
+            checked={q.auto}
+            onChange={(e) => q.setAuto(e.target.checked)}
+          />{" "}
+          auto
         </label>
-        <button className={`refresh${spinning ? " spin" : ""}`} title="Refresh" onClick={handleRefresh}>⟳</button>
+        <button
+          type="button"
+          className="filters-toggle"
+          onClick={() => setFiltersOpen((o) => !o)}
+        >
+          Filters
+          {activeFilters > 0 ? (
+            <span className="tab-badge">{activeFilters}</span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          className={`refresh${spinning ? " spin" : ""}`}
+          title="Refresh"
+          onClick={handleRefresh}
+        >
+          ⟳
+        </button>
       </header>
 
-      <section className="filters">
+      <section className={`filters${filtersOpen ? "" : " collapsed"}`}>
         <div className="filter" id="modelFilter">
           <Multiselect
             label="model"
             options={q.options.models}
             selected={q.models}
-            onChange={(v) => { q.setModels(v); q.loadAll({ models: v, offset: 0 }); }}
+            onChange={(v) => {
+              q.setModels(v);
+              q.loadAll({ models: v, offset: 0 });
+            }}
             swatch
           />
         </div>
@@ -106,19 +192,34 @@ export function StatsTopbar({ view, onView, q, liveCount, onRefresh }: Props) {
             label="protocol"
             options={q.options.protocols}
             selected={q.protocols}
-            onChange={(v) => { q.setProtocols(v); q.loadAll({ protocols: v, offset: 0 }); }}
+            onChange={(v) => {
+              q.setProtocols(v);
+              q.loadAll({ protocols: v, offset: 0 });
+            }}
           />
         </div>
         <div className="seg" id="bucketSeg" title="Time-series granularity">
           {BUCKETS.map(([val, label]) => (
-            <button key={val} className={q.bucket === val ? "active" : ""} onClick={() => { q.setBucket(val); q.loadAll({ bucket: val }); }}>{label}</button>
+            <button
+              type="button"
+              key={val}
+              className={q.bucket === val ? "active" : ""}
+              onClick={() => {
+                q.setBucket(val);
+                q.loadAll({ bucket: val });
+              }}
+            >
+              {label}
+            </button>
           ))}
         </div>
         <div className="spacer" />
         <div className="status-kpis" id="kpiCondensed">
           <Condensed s={q.summary} />
         </div>
-        <span className="status" id="statusLine">{q.status}</span>
+        <span className="status" id="statusLine">
+          {q.status}
+        </span>
       </section>
     </div>
   );
