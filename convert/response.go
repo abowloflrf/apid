@@ -1,16 +1,17 @@
 package convert
 
 import (
+	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/abowloflrf/apid/protocol"
 )
 
 // ChatToResponses 把一个非流式 Chat Completions 响应转换为 Responses API 响应。
 // 输出项顺序：reasoning -> message(文本) -> function_call(工具调用)。
-// namespaces maps Chat tool names back to their original Responses identity,
-// including namespace and custom tool type.
-func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedTool) *protocol.ResponsesResponse {
+// tools maps Chat tool names back to their original Responses identity.
+func ChatToResponses(c *protocol.ChatResponse, tools ToolContext) *protocol.ResponsesResponse {
 	id := stripPrefix(c.ID)
 
 	var msg protocol.ChatMessage
@@ -67,8 +68,8 @@ func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedT
 
 	// 3) Restore each Chat tool call to its original Responses tool type.
 	for i, tc := range msg.ToolCalls {
-		ref := resolveTool(tc.Function.Name, namespaces)
-		if ref.Type == "custom" {
+		ref := resolveTool(tc.Function.Name, tools)
+		if ref.Kind == "custom" {
 			input := unwrapCustomToolInput(tc.Function.Arguments)
 			output = append(output, protocol.OutputItem{
 				Type:      "custom_tool_call",
@@ -81,13 +82,24 @@ func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedT
 			})
 			continue
 		}
+		if ref.Kind == "tool_search" {
+			output = append(output, protocol.OutputItem{
+				Type:      "tool_search_call",
+				ID:        toolSearchCallItemID(id, i),
+				Status:    "completed",
+				CallID:    tc.ID,
+				Arguments: normalizeToolSearchArguments(tc.Function.Arguments),
+				Execution: ref.Execution,
+			})
+			continue
+		}
 		output = append(output, protocol.OutputItem{
 			Type:      "function_call",
 			ID:        callItemID(id, i),
 			Status:    "completed",
 			CallID:    tc.ID,
 			Name:      ref.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: jsonString(tc.Function.Arguments),
 			Namespace: ref.Namespace,
 		})
 	}
@@ -149,19 +161,38 @@ func mapFinishReason(reason string) (status, incompleteReason string) {
 
 // splitToolName 把上游的扁平工具名拆成 (本地名, 命名空间)。
 // 命中 namespaces 映射的(MCP 工具)返回本地名 + 命名空间；其余原样返回、namespace 为空。
-func splitToolName(flat string, namespaces map[string]NamespacedTool) (name, namespace string) {
-	ref := resolveTool(flat, namespaces)
+func splitToolName(flat string, tools ToolContext) (name, namespace string) {
+	ref := resolveTool(flat, tools)
 	return ref.Name, ref.Namespace
 }
 
-func resolveTool(flat string, tools map[string]NamespacedTool) NamespacedTool {
+func resolveTool(flat string, tools ToolContext) ToolSpec {
 	if ref, ok := tools[flat]; ok {
-		if ref.Type == "" {
-			ref.Type = "function"
+		if ref.Kind == "" {
+			ref.Kind = "function"
 		}
 		return ref
 	}
-	return NamespacedTool{Type: "function", Name: flat}
+	return ToolSpec{Kind: "function", Name: flat}
+}
+
+func jsonString(value string) json.RawMessage {
+	b, _ := json.Marshal(value)
+	return b
+}
+
+func normalizeToolSearchArguments(arguments string) json.RawMessage {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return json.RawMessage(`{}`)
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal([]byte(arguments), &obj) == nil {
+		b, _ := json.Marshal(obj)
+		return b
+	}
+	b, _ := json.Marshal(map[string]string{"query": arguments})
+	return b
 }
 
 // callItemID 为第 i 个工具调用生成 function_call 输出项的 id。
@@ -171,6 +202,10 @@ func callItemID(base string, i int) string {
 
 func customCallItemID(base string, i int) string {
 	return "ctc_" + base + "_" + strconv.Itoa(i)
+}
+
+func toolSearchCallItemID(base string, i int) string {
+	return "tsc_" + base + "_" + strconv.Itoa(i)
 }
 
 // stripPrefix 去掉上游 id 里常见的 "chatcmpl-" 前缀，方便拼成 resp_/msg_ 形式。

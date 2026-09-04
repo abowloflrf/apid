@@ -33,6 +33,7 @@ type ResponsesTool struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Format      json.RawMessage `json:"format,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	Execution   string          `json:"execution,omitempty"`
 	// Tools contains the children of a namespace tool.
 	Tools []ResponsesTool `json:"tools,omitempty"`
 }
@@ -59,16 +60,17 @@ type ResponsesTextFormat struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// InputItem is a message, reasoning item, function call, custom tool call,
-// or the output of either tool call type from a Responses input array.
+// InputItem is a message, reasoning item, tool call, tool output, or a dynamic
+// tool declaration from a Responses input array.
 type InputItem struct {
 	Type    string          `json:"type,omitempty"`
+	ID      string          `json:"id,omitempty"`
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"`
 	// function_call
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 	// function_call 的命名空间(MCP 工具组)。多轮回传时与本地 Name 一起拼回上游的
 	// 扁平全限定名，使其与发给上游的工具定义一致。
 	Namespace string `json:"namespace,omitempty"`
@@ -76,6 +78,10 @@ type InputItem struct {
 	Input string `json:"input,omitempty"`
 	// function_call_output：可能是字符串或内容块数组
 	Output json.RawMessage `json:"output,omitempty"`
+	// tool_search_call / tool_search_output
+	Status    string          `json:"status,omitempty"`
+	Execution string          `json:"execution,omitempty"`
+	Tools     []ResponsesTool `json:"tools,omitempty"`
 	// reasoning：思考模型的推理摘要，多轮时需回传给上游
 	Summary []SummaryText `json:"summary,omitempty"`
 }
@@ -109,7 +115,7 @@ type IncompleteDetails struct {
 	Reason string `json:"reason"`
 }
 
-// OutputItem is a Responses message, reasoning, function_call, or custom_tool_call.
+// OutputItem is a Responses message, reasoning, or tool call.
 type OutputItem struct {
 	Type   string `json:"type"`
 	ID     string `json:"id"`
@@ -118,14 +124,16 @@ type OutputItem struct {
 	Role    string          `json:"role,omitempty"`
 	Content []OutputContent `json:"content,omitempty"`
 	// function_call
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 	// custom_tool_call. A pointer preserves the required field when the input is empty.
 	Input *string `json:"input,omitempty"`
 	// function_call 的命名空间(MCP 工具组)。Codex 等客户端按 {name, namespace}
 	// 在注册表里精确匹配工具，缺这个字段会路由失败(unsupported call)。
 	Namespace string `json:"namespace,omitempty"`
+	// tool_search_call
+	Execution string `json:"execution,omitempty"`
 	// reasoning
 	Summary []SummaryText `json:"summary,omitempty"`
 }

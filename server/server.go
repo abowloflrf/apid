@@ -593,7 +593,7 @@ func (s *Server) convertResponsesToChat(ex *exchange) {
 		return
 	}
 
-	chatReq, namespaces, err := convert.ResponsesToChat(&req, s.reasoning)
+	chatReq, toolContext, err := convert.ResponsesToChat(&req, s.reasoning)
 	if err != nil {
 		ex.stat.Error = "convert request: " + err.Error()
 		writeError(ex.w, http.StatusBadRequest, err.Error())
@@ -628,15 +628,15 @@ func (s *Server) convertResponsesToChat(ex *exchange) {
 	}
 
 	if req.Stream {
-		s.streamResponse(ex, resp.Body, req.Model, namespaces)
+		s.streamResponse(ex, resp.Body, req.Model, toolContext)
 		return
 	}
-	s.jsonResponse(ex, resp.Body, namespaces)
+	s.jsonResponse(ex, resp.Body, toolContext)
 }
 
 // ---- 非流式 ----
 
-func (s *Server) jsonResponse(ex *exchange, body io.Reader, namespaces map[string]convert.NamespacedTool) {
+func (s *Server) jsonResponse(ex *exchange, body io.Reader, toolContext convert.ToolContext) {
 	var chatResp protocol.ChatResponse
 	if err := json.NewDecoder(body).Decode(&chatResp); err != nil {
 		ex.stat.Error = "parse upstream response: " + err.Error()
@@ -645,7 +645,7 @@ func (s *Server) jsonResponse(ex *exchange, body io.Reader, namespaces map[strin
 	}
 	ex.stat.Usage = toStatsUsage(chatResp.Usage)
 
-	out := convert.ChatToResponses(&chatResp, namespaces)
+	out := convert.ChatToResponses(&chatResp, toolContext)
 
 	// 回写 reasoning 缓存，供下轮重放回填。
 	if len(chatResp.Choices) > 0 {
@@ -660,7 +660,7 @@ func (s *Server) jsonResponse(ex *exchange, body io.Reader, namespaces map[strin
 
 // streamResponse 处理流式：把上游 SSE 转换为 Responses 事件流，完成后回写 reasoning 缓存。
 // clientModel 是回显给客户端的 model（Responses 响应回显请求里的 model）。
-func (s *Server) streamResponse(ex *exchange, body io.Reader, clientModel string, namespaces map[string]convert.NamespacedTool) {
+func (s *Server) streamResponse(ex *exchange, body io.Reader, clientModel string, toolContext convert.ToolContext) {
 	flusher, ok := ex.w.(http.Flusher)
 	if !ok {
 		ex.stat.Error = "streaming not supported"
@@ -678,7 +678,7 @@ func (s *Server) streamResponse(ex *exchange, body io.Reader, clientModel string
 	if cb := ex.live.sseObserver(config.ProtoChat); cb != nil {
 		body = &lineObserverReader{r: body, cb: cb}
 	}
-	result, err := convert.StreamChatToResponses(ex.req.Context(), sw, body, clientModel, namespaces)
+	result, err := convert.StreamChatToResponses(ex.req.Context(), sw, body, clientModel, toolContext)
 	if err != nil {
 		s.log.Warn("stream conversion failed", "err", err)
 		ex.stat.Error = "stream conversion: " + err.Error()

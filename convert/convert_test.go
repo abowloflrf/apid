@@ -73,6 +73,118 @@ func TestRequestTools(t *testing.T) {
 	}
 }
 
+func TestRequestToolSearchBuildsDynamicToolContext(t *testing.T) {
+	body := `{
+      "model":"m",
+      "input":[
+        {"role":"user","content":"find a filesystem tool"},
+        {"type":"tool_search_call","id":"call_search","execution":"client","arguments":{"query":"filesystem","limit":3}},
+        {"type":"tool_search_output","id":"tso_1","call_id":"call_search","execution":"client","tools":[
+          {"type":"function","name":"shared","description":"dynamic duplicate","parameters":{"type":"object"}},
+          {"type":"namespace","name":"fs","tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]},
+          {"type":"custom","name":"apply_patch"}
+        ]},
+        {"type":"additional_tools","tools":[
+          {"type":"function","name":"extra","parameters":{"properties":{"value":{"type":"string"}}}}
+        ]}
+      ],
+      "tools":[
+        {"type":"tool_search","execution":"client"},
+        {"type":"function","name":"shared","description":"top-level wins","parameters":{"type":"object"}}
+      ],
+      "tool_choice":{"type":"tool_search"}
+    }`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, tools, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantNames := []string{"tool_search", "shared", "fs__read_file", "apply_patch", "extra"}
+	if len(chat.Tools) != len(wantNames) {
+		t.Fatalf("tool count = %d, want %d: %+v", len(chat.Tools), len(wantNames), chat.Tools)
+	}
+	for i, want := range wantNames {
+		if got := chat.Tools[i].Function.Name; got != want {
+			t.Fatalf("tool[%d] name = %q, want %q", i, got, want)
+		}
+	}
+	if got := chat.Tools[1].Function.Description; got != "top-level wins" {
+		t.Fatalf("duplicate tool precedence = %q", got)
+	}
+	if ref := tools["tool_search"]; ref.Kind != "tool_search" || ref.Execution != "client" {
+		t.Fatalf("tool_search context = %+v", ref)
+	}
+	if ref := tools["fs__read_file"]; ref.Kind != "function" || ref.Namespace != "fs" || ref.Name != "read_file" {
+		t.Fatalf("dynamic namespace context = %+v", ref)
+	}
+	if ref := tools["apply_patch"]; ref.Kind != "custom" || ref.Name != "apply_patch" {
+		t.Fatalf("dynamic custom context = %+v", ref)
+	}
+	if !strings.Contains(string(chat.ToolChoice), `"function":{"name":"tool_search"}`) {
+		t.Fatalf("tool_search choice = %s", chat.ToolChoice)
+	}
+
+	if len(chat.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3: %+v", len(chat.Messages), chat.Messages)
+	}
+	call := chat.Messages[1].ToolCalls[0]
+	if call.ID != "call_search" || call.Function.Name != "tool_search" || call.Function.Arguments != `{"query":"filesystem","limit":3}` {
+		t.Fatalf("tool_search call = %+v", call)
+	}
+	result := chat.Messages[2]
+	if result.Role != "tool" || result.ToolCallID != "call_search" {
+		t.Fatalf("tool_search output message = %+v", result)
+	}
+	var output struct {
+		Type  string                   `json:"type"`
+		Tools []protocol.ResponsesTool `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(result.Content), &output); err != nil {
+		t.Fatalf("decode tool_search output: %v; content=%s", err, result.Content)
+	}
+	if output.Type != "tool_search_output" || len(output.Tools) != 3 {
+		t.Fatalf("tool_search output content = %+v", output)
+	}
+}
+
+func TestDynamicToolContextRestoresLoadedTool(t *testing.T) {
+	body := `{
+      "model":"m",
+      "input":[{"type":"additional_tools","tools":[
+        {"type":"namespace","name":"db","tools":[{"type":"function","name":"query","parameters":{"type":"object"}}]}
+      ]}]
+    }`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chatReq, tools, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chatReq.Messages) != 0 || len(chatReq.Tools) != 1 || chatReq.Tools[0].Function.Name != "db__query" {
+		t.Fatalf("additional_tools conversion = %+v", chatReq)
+	}
+
+	chatResp := &protocol.ChatResponse{
+		ID: "chatcmpl-dynamic", Model: "m",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
+				ID: "call_query", Function: protocol.ChatToolCallFunction{Name: "db__query", Arguments: `{"sql":"select 1"}`},
+			}}},
+			FinishReason: "tool_calls",
+		}},
+	}
+	call := ChatToResponses(chatResp, tools).Output[0]
+	if call.Type != "function_call" || call.Name != "query" || call.Namespace != "db" {
+		t.Fatalf("restored dynamic tool call = %+v", call)
+	}
+}
+
 func TestRequestCustomTool(t *testing.T) {
 	body := `{
       "model":"m",
@@ -122,7 +234,7 @@ func TestRequestCustomTool(t *testing.T) {
 		len(schema.Required) != 1 || schema.Required[0] != "input" {
 		t.Fatalf("custom tool schema = %+v", schema)
 	}
-	if ref := tools["apply_patch"]; ref.Type != "custom" || ref.Name != "apply_patch" {
+	if ref := tools["apply_patch"]; ref.Kind != "custom" || ref.Name != "apply_patch" {
 		t.Fatalf("custom tool mapping = %+v", ref)
 	}
 	if !strings.Contains(string(chat.ToolChoice), `"function":{"name":"apply_patch"}`) {
@@ -170,7 +282,7 @@ func TestNamespacedCustomToolRoundTrip(t *testing.T) {
 		t.Fatalf("namespaced custom call name = %q", got)
 	}
 	ref := tools["shell__exec"]
-	if ref.Type != "custom" || ref.Namespace != "shell" || ref.Name != "exec" {
+	if ref.Kind != "custom" || ref.Namespace != "shell" || ref.Name != "exec" {
 		t.Fatalf("namespaced custom mapping = %+v", ref)
 	}
 
@@ -905,9 +1017,53 @@ func TestResponseToolsAndReasoning(t *testing.T) {
 	}
 }
 
+func TestResponseToolSearchRestored(t *testing.T) {
+	tools := ToolContext{
+		"tool_search": {Kind: "tool_search", Name: "tool_search", Execution: "client"},
+	}
+	chat := &protocol.ChatResponse{
+		ID: "chatcmpl-search", Created: 1, Model: "m",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
+				ID: "call_search", Type: "function",
+				Function: protocol.ChatToolCallFunction{Name: "tool_search", Arguments: `{"query":"filesystem","limit":4}`},
+			}}},
+			FinishReason: "tool_calls",
+		}},
+	}
+	resp := ChatToResponses(chat, tools)
+	if len(resp.Output) != 1 {
+		t.Fatalf("output count = %d, want 1: %+v", len(resp.Output), resp.Output)
+	}
+	call := resp.Output[0]
+	if call.Type != "tool_search_call" || call.CallID != "call_search" || call.Execution != "client" || !strings.HasPrefix(call.ID, "tsc_") {
+		t.Fatalf("tool_search identity = %+v", call)
+	}
+	if call.Name != "" {
+		t.Fatalf("tool_search must not expose a function name: %+v", call)
+	}
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+		t.Fatal(err)
+	}
+	if args.Query != "filesystem" || args.Limit != 4 {
+		t.Fatalf("tool_search arguments = %+v", args)
+	}
+	wire, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(wire), `"arguments":"`) {
+		t.Fatalf("tool_search arguments must be an object: %s", wire)
+	}
+}
+
 func TestResponseCustomToolRestored(t *testing.T) {
-	tools := map[string]NamespacedTool{
-		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	tools := ToolContext{
+		"apply_patch": {Kind: "custom", Name: "apply_patch"},
 	}
 	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-x", Created: 1, Model: "m",
@@ -930,7 +1086,7 @@ func TestResponseCustomToolRestored(t *testing.T) {
 	if call.Type != "custom_tool_call" || call.CallID != "call_9" || call.Name != "apply_patch" {
 		t.Fatalf("custom tool identity = %+v", call)
 	}
-	if call.Input == nil || *call.Input != "*** Begin Patch\n*** End Patch" || call.Arguments != "" {
+	if call.Input == nil || *call.Input != "*** Begin Patch\n*** End Patch" || len(call.Arguments) != 0 {
 		t.Fatalf("custom input was not restored: %+v", call)
 	}
 	if !strings.HasPrefix(call.ID, "ctc_") {
@@ -939,8 +1095,8 @@ func TestResponseCustomToolRestored(t *testing.T) {
 }
 
 func TestResponseCustomToolKeepsEmptyInput(t *testing.T) {
-	tools := map[string]NamespacedTool{
-		"custom": {Type: "custom", Name: "custom"},
+	tools := ToolContext{
+		"custom": {Kind: "custom", Name: "custom"},
 	}
 	chat := &protocol.ChatResponse{
 		ID: "chatcmpl-empty", Model: "m",
@@ -982,8 +1138,8 @@ func TestUnwrapCustomToolInputFallback(t *testing.T) {
 }
 
 func TestStreamCustomToolRestored(t *testing.T) {
-	tools := map[string]NamespacedTool{
-		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	tools := ToolContext{
+		"apply_patch": {Kind: "custom", Name: "apply_patch"},
 	}
 	raw := "data: " +
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"apply_patch","arguments":"{\"input\":\"*** Begin"}}]}}]}` +
@@ -1031,9 +1187,48 @@ func TestStreamCustomToolRestored(t *testing.T) {
 	}
 }
 
+func TestStreamToolSearchRestored(t *testing.T) {
+	tools := ToolContext{
+		"tool_search": {Kind: "tool_search", Name: "tool_search", Execution: "client"},
+	}
+	raw := "data: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_search","type":"function","function":{"name":"tool_search","arguments":"{\"query\":\"file"}}]}}]}` +
+		"\n\ndata: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"system\",\"limit\":2}"}}]},"finish_reason":"tool_calls"}]}` +
+		"\n\ndata: [DONE]\n\n"
+
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", tools); err != nil {
+		t.Fatal(err)
+	}
+	payloads := parseSSEPayloads(t, s.b.String())
+	var addedItem, doneItem map[string]any
+	for _, payload := range payloads {
+		switch payload["type"] {
+		case "response.output_item.added":
+			addedItem, _ = payload["item"].(map[string]any)
+		case "response.output_item.done":
+			doneItem, _ = payload["item"].(map[string]any)
+		}
+	}
+	if addedItem == nil || addedItem["type"] != "tool_search_call" || addedItem["execution"] != "client" {
+		t.Fatalf("tool_search added item = %+v", addedItem)
+	}
+	if doneItem == nil || doneItem["type"] != "tool_search_call" || doneItem["call_id"] != "call_search" {
+		t.Fatalf("tool_search done item = %+v", doneItem)
+	}
+	args, _ := doneItem["arguments"].(map[string]any)
+	if args["query"] != "filesystem" || args["limit"] != float64(2) {
+		t.Fatalf("tool_search done arguments = %+v", args)
+	}
+	if strings.Contains(s.b.String(), "response.function_call_arguments") || strings.Contains(s.b.String(), "response.custom_tool_call_input") {
+		t.Fatalf("tool_search must not emit function/custom argument events:\n%s", s.b.String())
+	}
+}
+
 func TestStreamCustomToolWaitsForLateName(t *testing.T) {
-	tools := map[string]NamespacedTool{
-		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	tools := ToolContext{
+		"apply_patch": {Kind: "custom", Name: "apply_patch"},
 	}
 	raw := "data: " +
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"arguments":"{\"input\":\"pwd"}}]}}]}` +
@@ -1060,8 +1255,8 @@ func TestStreamCustomToolWaitsForLateName(t *testing.T) {
 }
 
 func TestStreamCustomToolSynthesizesMissingCallID(t *testing.T) {
-	tools := map[string]NamespacedTool{
-		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	tools := ToolContext{
+		"apply_patch": {Kind: "custom", Name: "apply_patch"},
 	}
 	raw := "data: " +
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"apply_patch","arguments":"{\"input\":\"pwd\"}"}}]},"finish_reason":"tool_calls"}]}` +
@@ -1309,7 +1504,7 @@ func TestRequestNamespaceCallReflatten(t *testing.T) {
 }
 
 func TestStreamNamespaceRestored(t *testing.T) {
-	ns := map[string]NamespacedTool{
+	ns := ToolContext{
 		"mcp__tavily__tavily_search": {Namespace: "mcp__tavily", Name: "tavily_search"},
 	}
 	raw := "data: " +

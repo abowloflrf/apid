@@ -37,17 +37,17 @@ type StreamResult struct {
 // 产出的关键事件：
 //
 //	response.created
-//	response.output_item.added / .done           (message / reasoning / function_call / custom_tool_call)
+//	response.output_item.added / .done           (message / reasoning / function_call / custom_tool_call / tool_search_call)
 //	response.output_text.delta / .done            (文本)
 //	response.reasoning_summary_text.delta / .done (reasoning)
 //	response.function_call_arguments.delta / .done(工具调用参数)
 //	response.custom_tool_call_input.delta / .done (custom tool input)
 //	response.completed
-func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, model string, namespaces map[string]NamespacedTool) (*StreamResult, error) {
+func StreamChatToResponses(ctx context.Context, w SSEWriter, body io.Reader, model string, tools ToolContext) (*StreamResult, error) {
 	respID := newStreamUUID()
 	st := &streamState{
 		w: w, model: model, tools: map[int]*toolState{},
-		namespaces: namespaces, responseID: respID,
+		toolContext: tools, responseID: respID,
 		createdAt: time.Now().Unix(),
 		outputs:   make([]any, 0),
 	}
@@ -190,7 +190,7 @@ type streamState struct {
 	tools     map[int]*toolState
 	toolOrder []int
 
-	namespaces map[string]NamespacedTool
+	toolContext ToolContext
 }
 
 type toolState struct {
@@ -216,8 +216,8 @@ func (st *streamState) openingResponse() map[string]any {
 }
 
 func (st *streamState) toolCallItem(ts *toolState, status, args string) map[string]any {
-	ref := resolveTool(ts.name, st.namespaces)
-	if ref.Type == "custom" {
+	ref := resolveTool(ts.name, st.toolContext)
+	if ref.Kind == "custom" {
 		item := map[string]any{
 			"id": ts.itemID, "type": "custom_tool_call", "status": status,
 			"call_id": ts.callID, "name": ref.Name, "input": unwrapCustomToolInput(args),
@@ -226,6 +226,17 @@ func (st *streamState) toolCallItem(ts *toolState, status, args string) map[stri
 			item["namespace"] = ref.Namespace
 		}
 		return item
+	}
+	if ref.Kind == "tool_search" {
+		execution := ref.Execution
+		if execution == "" {
+			execution = "client"
+		}
+		return map[string]any{
+			"id": ts.itemID, "type": "tool_search_call", "status": status,
+			"call_id": ts.callID, "execution": execution,
+			"arguments": json.RawMessage(normalizeToolSearchArguments(args)),
+		}
 	}
 	item := map[string]any{
 		"id": ts.itemID, "type": "function_call", "status": status,
@@ -372,7 +383,7 @@ func (st *streamState) handleToolCall(tc protocol.ChatToolCall) {
 		return
 	}
 	if args != "" && ts.added && !started {
-		if resolveTool(ts.name, st.namespaces).Type != "custom" {
+		if resolveTool(ts.name, st.toolContext).Kind == "function" {
 			st.emit("response.function_call_arguments.delta", map[string]any{
 				"type": "response.function_call_arguments.delta", "item_id": ts.itemID,
 				"output_index": ts.outputIndex, "delta": args,
@@ -386,8 +397,11 @@ func (st *streamState) startTool(ts *toolState, idx int) bool {
 		return false
 	}
 	itemPrefix := "fc_"
-	if resolveTool(ts.name, st.namespaces).Type == "custom" {
+	switch resolveTool(ts.name, st.toolContext).Kind {
+	case "custom":
 		itemPrefix = "ctc_"
+	case "tool_search":
+		itemPrefix = "tsc_"
 	}
 	ts.itemID = itemPrefix + st.responseID + "_" + strconv.Itoa(idx)
 	ts.added = true
@@ -395,7 +409,7 @@ func (st *streamState) startTool(ts *toolState, idx int) bool {
 		"type": "response.output_item.added", "output_index": ts.outputIndex,
 		"item": st.toolCallItem(ts, "in_progress", ""),
 	})
-	if st.err == nil && ts.args.Len() > 0 && resolveTool(ts.name, st.namespaces).Type != "custom" {
+	if st.err == nil && ts.args.Len() > 0 && resolveTool(ts.name, st.toolContext).Kind == "function" {
 		st.emit("response.function_call_arguments.delta", map[string]any{
 			"type": "response.function_call_arguments.delta", "item_id": ts.itemID,
 			"output_index": ts.outputIndex, "delta": ts.args.String(),
@@ -425,7 +439,8 @@ func (st *streamState) finish() {
 			return
 		}
 		args := ts.args.String()
-		if resolveTool(ts.name, st.namespaces).Type == "custom" {
+		switch resolveTool(ts.name, st.toolContext).Kind {
+		case "custom":
 			input := unwrapCustomToolInput(args)
 			if input != "" {
 				st.emit("response.custom_tool_call_input.delta", map[string]any{
@@ -437,7 +452,7 @@ func (st *streamState) finish() {
 				"type": "response.custom_tool_call_input.done", "item_id": ts.itemID,
 				"output_index": ts.outputIndex, "input": input,
 			})
-		} else {
+		case "function":
 			st.emit("response.function_call_arguments.done", map[string]any{
 				"type": "response.function_call_arguments.done", "item_id": ts.itemID,
 				"output_index": ts.outputIndex, "arguments": args,

@@ -2,6 +2,7 @@
 package convert
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -22,9 +23,9 @@ type ReasoningSource interface {
 // 而思考模型要求 assistant 的 reasoning_content 必须回传，故按 call_id 或
 // assistant 文本指纹从网关缓存里取回；src 为 nil 时跳过回填。
 //
-// 同时返回「Chat 工具名 -> 原始 Responses 工具」映射(见 expandTools)，供响应方向
-// 恢复 namespace 和 custom tool 类型。
-func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protocol.ChatRequest, map[string]NamespacedTool, error) {
+// The returned request-scoped ToolContext restores namespace and tool kinds
+// when the Chat response is converted back to Responses.
+func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protocol.ChatRequest, ToolContext, error) {
 	messages := make([]protocol.ChatMessage, 0, 4)
 
 	// instructions 映射为 system 消息，放在最前面。
@@ -32,13 +33,21 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 		messages = append(messages, protocol.ChatMessage{Role: "system", Content: r.Instructions})
 	}
 
+	dynamicTools, err := inputToolDeclarations(r.Input)
+	if err != nil {
+		return nil, nil, err
+	}
+	allTools := make([]protocol.ResponsesTool, 0, len(r.Tools)+len(dynamicTools))
+	allTools = append(allTools, r.Tools...)
+	allTools = append(allTools, dynamicTools...)
+	tools, toolContext := expandTools(allTools)
+
 	inputMsgs, err := parseInput(r.Input, src)
 	if err != nil {
 		return nil, nil, err
 	}
 	messages = append(messages, inputMsgs...)
 
-	tools, namespaces := expandTools(r.Tools)
 	chat := &protocol.ChatRequest{
 		Model:          r.Model,
 		Messages:       messages,
@@ -62,7 +71,7 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 		chat.ReasoningEffort = r.Reasoning.Effort
 	}
 
-	return chat, namespaces, nil
+	return chat, toolContext, nil
 }
 
 func convertResponseFormat(text *protocol.ResponsesTextConfig) *protocol.ChatResponseFormat {
@@ -82,20 +91,34 @@ func convertResponseFormat(text *protocol.ResponsesTextConfig) *protocol.ChatRes
 	return chat
 }
 
-// NamespacedTool records the original Responses identity of a converted Chat tool.
-// Type is set for tools whose response shape cannot be inferred from the flat Chat name.
-type NamespacedTool struct {
-	Type      string
+// ToolSpec records the original Responses identity of a converted Chat tool.
+type ToolSpec struct {
+	Kind      string
 	Namespace string
 	Name      string
+	Execution string
 }
+
+// ToolContext maps each emitted Chat function name back to its Responses tool.
+// It also serves as the first-wins set when top-level and dynamic declarations merge.
+type ToolContext map[string]ToolSpec
 
 // expandTools 递归展开 Responses 工具定义，一次遍历得到两样东西：
 //   - 发给上游的扁平 Chat 工具列表
 //   - 「扁平名 -> (命名空间, 本地名)」映射
-func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[string]NamespacedTool) {
+func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, ToolContext) {
 	var chat []protocol.ChatTool
-	namespaces := make(map[string]NamespacedTool)
+	toolContext := make(ToolContext)
+	add := func(flat string, spec ToolSpec, tool protocol.ChatTool) {
+		if flat == "" {
+			return
+		}
+		if _, exists := toolContext[flat]; exists {
+			return
+		}
+		toolContext[flat] = spec
+		chat = append(chat, tool)
+	}
 
 	var walk func(tools []protocol.ResponsesTool, prefix string)
 	walk = func(tools []protocol.ResponsesTool, prefix string) {
@@ -105,7 +128,7 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 				walk(t.Tools, joinToolName(prefix, t.Name))
 			case t.Type == "function" && t.Name != "":
 				flat := joinToolName(prefix, t.Name)
-				chat = append(chat, protocol.ChatTool{
+				add(flat, ToolSpec{Kind: "function", Namespace: prefix, Name: t.Name}, protocol.ChatTool{
 					Type: "function",
 					Function: protocol.ChatToolFunction{
 						Name:        flat,
@@ -114,12 +137,9 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 						Strict:      t.Strict,
 					},
 				})
-				if prefix != "" {
-					namespaces[flat] = NamespacedTool{Type: "function", Namespace: prefix, Name: t.Name}
-				}
 			case t.Type == "custom" && t.Name != "":
 				flat := joinToolName(prefix, t.Name)
-				chat = append(chat, protocol.ChatTool{
+				add(flat, ToolSpec{Kind: "custom", Namespace: prefix, Name: t.Name}, protocol.ChatTool{
 					Type: "function",
 					Function: protocol.ChatToolFunction{
 						Name:        flat,
@@ -127,7 +147,25 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 						Parameters:  customToolParameters(),
 					},
 				})
-				namespaces[flat] = NamespacedTool{Type: "custom", Namespace: prefix, Name: t.Name}
+			case t.Type == "tool_search":
+				parameters := t.Parameters
+				if len(parameters) == 0 || string(parameters) == "null" {
+					parameters = toolSearchParameters()
+				} else {
+					parameters = ensureObjectSchema(parameters)
+				}
+				description := t.Description
+				if description == "" {
+					description = "Search and load tools available to the client for the current task."
+				}
+				add("tool_search", ToolSpec{Kind: "tool_search", Name: "tool_search", Execution: "client"}, protocol.ChatTool{
+					Type: "function",
+					Function: protocol.ChatToolFunction{
+						Name:        "tool_search",
+						Description: description,
+						Parameters:  parameters,
+					},
+				})
 			default:
 				// convert has no injected logger; the process default is set in main.
 				slog.Warn("skipping unsupported tool type", "type", t.Type)
@@ -139,7 +177,11 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 	if len(chat) == 0 {
 		chat = nil
 	}
-	return chat, namespaces
+	return chat, toolContext
+}
+
+func toolSearchParameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}`)
 }
 
 func customToolParameters() json.RawMessage {
@@ -204,6 +246,9 @@ func convertToolChoice(raw json.RawMessage) json.RawMessage {
 		})
 		return b
 	}
+	if obj.Type == "tool_search" {
+		return json.RawMessage(`{"type":"function","function":{"name":"tool_search"}}`)
+	}
 	switch obj.Type {
 	case "auto":
 		return json.RawMessage(`"auto"`)
@@ -213,6 +258,29 @@ func convertToolChoice(raw json.RawMessage) json.RawMessage {
 		return json.RawMessage(`"required"`)
 	}
 	return raw
+}
+
+// inputToolDeclarations collects tools made available by earlier search results
+// and by Responses-compatible additional_tools input items.
+func inputToolDeclarations(raw json.RawMessage) ([]protocol.ResponsesTool, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return nil, nil
+	}
+	var items []protocol.InputItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("parse input: %w", err)
+	}
+	var tools []protocol.ResponsesTool
+	for _, item := range items {
+		if item.Type == "tool_search_output" || item.Type == "additional_tools" {
+			tools = append(tools, item.Tools...)
+		}
+	}
+	return tools, nil
 }
 
 // parseInput 解析 Responses 的 input 字段。
@@ -234,7 +302,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 	outputCallIDs := make(map[string]struct{})
 	for _, it := range items {
-		if (it.Type == "function_call_output" || it.Type == "custom_tool_call_output") && it.CallID != "" {
+		if (it.Type == "function_call_output" || it.Type == "custom_tool_call_output" || it.Type == "tool_search_output") && it.CallID != "" {
 			outputCallIDs[it.CallID] = struct{}{}
 		}
 	}
@@ -262,21 +330,30 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 	}
 
 	for i, it := range items {
-		if it.Type != "function_call" && it.Type != "custom_tool_call" {
+		if it.Type != "function_call" && it.Type != "custom_tool_call" && it.Type != "tool_search_call" {
 			toolMsg = nil
 		}
 		switch it.Type {
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			name := it.Name
+			callID := it.CallID
 			if it.Namespace != "" {
 				name = joinToolName(it.Namespace, it.Name)
 			}
-			arguments := it.Arguments
+			arguments := chatToolArguments(it.Arguments)
 			if it.Type == "custom_tool_call" {
 				arguments = wrapCustomToolInput(it.Input)
+			} else if it.Type == "tool_search_call" {
+				name = "tool_search"
+				if callID == "" {
+					callID = it.ID
+				}
+				if arguments == "" {
+					arguments = "{}"
+				}
 			}
 			call := protocol.ChatToolCall{
-				ID:   it.CallID,
+				ID:   callID,
 				Type: "function",
 				Function: protocol.ChatToolCallFunction{
 					Name:      name,
@@ -286,7 +363,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 			if toolMsg == nil {
 				// 新开一轮并行工具调用，reasoning_content 挂在首条上：
 				// 优先取缓存里按 call_id 存的原文，未命中再用 input 摘要兜底。
-				rc := lookupCall(src, it.CallID)
+				rc := lookupCall(src, callID)
 				if rc == "" {
 					rc = pendingReasoning
 				}
@@ -298,15 +375,19 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				toolMsg = &out[len(out)-1]
 			}
 			toolMsg.ToolCalls = append(toolMsg.ToolCalls, call)
-			if _, ok := outputCallIDs[it.CallID]; ok {
-				awaitingToolOutputs[it.CallID] = struct{}{}
+			if _, ok := outputCallIDs[callID]; ok {
+				awaitingToolOutputs[callID] = struct{}{}
 			}
 
-		case "function_call_output", "custom_tool_call_output":
+		case "function_call_output", "custom_tool_call_output", "tool_search_output":
+			content := extractText(it.Output)
+			if it.Type == "tool_search_output" {
+				content = toolSearchOutputContent(it)
+			}
 			out = append(out, protocol.ChatMessage{
 				Role:       "tool",
 				ToolCallID: it.CallID,
-				Content:    extractText(it.Output),
+				Content:    content,
 			})
 			delete(awaitingToolOutputs, it.CallID)
 			if len(awaitingToolOutputs) == 0 {
@@ -315,6 +396,9 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 		case "reasoning":
 			pendingReasoning = summaryText(it.Summary)
+
+		case "additional_tools":
+			// Declarations were merged into Chat tools before parsing history.
 
 		case "", "message":
 			if it.Role == "" {
@@ -341,6 +425,43 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 	flushDeferredMessages()
 	return out, nil
+}
+
+func chatToolArguments(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) == nil {
+		return compact.String()
+	}
+	return string(raw)
+}
+
+func toolSearchOutputContent(item protocol.InputItem) string {
+	b, err := json.Marshal(struct {
+		Type      string                   `json:"type"`
+		ID        string                   `json:"id,omitempty"`
+		CallID    string                   `json:"call_id"`
+		Execution string                   `json:"execution,omitempty"`
+		Status    string                   `json:"status,omitempty"`
+		Tools     []protocol.ResponsesTool `json:"tools"`
+	}{
+		Type:      "tool_search_output",
+		ID:        item.ID,
+		CallID:    item.CallID,
+		Execution: item.Execution,
+		Status:    item.Status,
+		Tools:     item.Tools,
+	})
+	if err != nil {
+		return `{"type":"tool_search_output","tools":[]}`
+	}
+	return string(b)
 }
 
 func wrapCustomToolInput(input string) string {
