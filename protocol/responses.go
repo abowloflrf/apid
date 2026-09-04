@@ -23,16 +23,17 @@ type ResponsesRequest struct {
 	Text              *ResponsesTextConfig `json:"text,omitempty"`
 }
 
-// ResponsesTool 对应 tools 数组里的一项。
-// 处理自定义函数工具(type=="function")；服务端内置工具(web_search 等)会被忽略。
-// type=="namespace"(如 MCP 工具组)时，真正的函数工具嵌在 Tools 里，转换时展开。
+// ResponsesTool is one entry from a Responses tools array. Function and
+// free-form custom tools are converted; unsupported built-in tools are skipped.
+// Namespace tools recursively contain their actual tools in Tools.
 type ResponsesTool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Format      json.RawMessage `json:"format,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
-	// namespace 工具组(MCP)内嵌的子工具，每个通常是 type=="function"。
+	// Tools contains the children of a namespace tool.
 	Tools []ResponsesTool `json:"tools,omitempty"`
 }
 
@@ -58,11 +59,8 @@ type ResponsesTextFormat struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// InputItem 是 input 数组里的一项。它可能是：
-//   - 一条消息(type 缺省或 "message")：使用 Role + Content
-//   - 一次函数调用(type=="function_call")：使用 CallID/Name/Arguments
-//   - 一个函数调用结果(type=="function_call_output")：使用 CallID/Output
-//   - 一段 reasoning(type=="reasoning")：demo 中转发到上游时会忽略
+// InputItem is a message, reasoning item, function call, custom tool call,
+// or the output of either tool call type from a Responses input array.
 type InputItem struct {
 	Type    string          `json:"type,omitempty"`
 	Role    string          `json:"role,omitempty"`
@@ -74,6 +72,8 @@ type InputItem struct {
 	// function_call 的命名空间(MCP 工具组)。多轮回传时与本地 Name 一起拼回上游的
 	// 扁平全限定名，使其与发给上游的工具定义一致。
 	Namespace string `json:"namespace,omitempty"`
+	// custom_tool_call free-form input
+	Input string `json:"input,omitempty"`
 	// function_call_output：可能是字符串或内容块数组
 	Output json.RawMessage `json:"output,omitempty"`
 	// reasoning：思考模型的推理摘要，多轮时需回传给上游
@@ -109,7 +109,7 @@ type IncompleteDetails struct {
 	Reason string `json:"reason"`
 }
 
-// OutputItem 是 output 数组里的一项，可能是 message / function_call / reasoning。
+// OutputItem is a Responses message, reasoning, function_call, or custom_tool_call.
 type OutputItem struct {
 	Type   string `json:"type"`
 	ID     string `json:"id"`
@@ -121,6 +121,8 @@ type OutputItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
+	// custom_tool_call. A pointer preserves the required field when the input is empty.
+	Input *string `json:"input,omitempty"`
 	// function_call 的命名空间(MCP 工具组)。Codex 等客户端按 {name, namespace}
 	// 在注册表里精确匹配工具，缺这个字段会路由失败(unsupported call)。
 	Namespace string `json:"namespace,omitempty"`

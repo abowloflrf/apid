@@ -22,8 +22,8 @@ type ReasoningSource interface {
 // 而思考模型要求 assistant 的 reasoning_content 必须回传，故按 call_id 或
 // assistant 文本指纹从网关缓存里取回；src 为 nil 时跳过回填。
 //
-// 同时返回「扁平工具名 -> (命名空间, 本地名)」映射(见 expandTools)，供响应方向
-// 把 MCP 工具的 function_call 从上游扁平名拆回本地名 + namespace。
+// 同时返回「Chat 工具名 -> 原始 Responses 工具」映射(见 expandTools)，供响应方向
+// 恢复 namespace 和 custom tool 类型。
 func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protocol.ChatRequest, map[string]NamespacedTool, error) {
 	messages := make([]protocol.ChatMessage, 0, 4)
 
@@ -82,8 +82,10 @@ func convertResponseFormat(text *protocol.ResponsesTextConfig) *protocol.ChatRes
 	return chat
 }
 
-// NamespacedTool 记录一个命名空间工具拆解后的两部分。
+// NamespacedTool records the original Responses identity of a converted Chat tool.
+// Type is set for tools whose response shape cannot be inferred from the flat Chat name.
 type NamespacedTool struct {
+	Type      string
 	Namespace string
 	Name      string
 }
@@ -113,8 +115,19 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 					},
 				})
 				if prefix != "" {
-					namespaces[flat] = NamespacedTool{Namespace: prefix, Name: t.Name}
+					namespaces[flat] = NamespacedTool{Type: "function", Namespace: prefix, Name: t.Name}
 				}
+			case t.Type == "custom" && t.Name != "":
+				flat := joinToolName(prefix, t.Name)
+				chat = append(chat, protocol.ChatTool{
+					Type: "function",
+					Function: protocol.ChatToolFunction{
+						Name:        flat,
+						Description: customToolDescription(t),
+						Parameters:  customToolParameters(),
+					},
+				})
+				namespaces[flat] = NamespacedTool{Type: "custom", Namespace: prefix, Name: t.Name}
 			default:
 				// convert has no injected logger; the process default is set in main.
 				slog.Warn("skipping unsupported tool type", "type", t.Type)
@@ -127,6 +140,21 @@ func expandTools(tools []protocol.ResponsesTool) ([]protocol.ChatTool, map[strin
 		chat = nil
 	}
 	return chat, namespaces
+}
+
+func customToolParameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}`)
+}
+
+func customToolDescription(tool protocol.ResponsesTool) string {
+	format := strings.TrimSpace(string(tool.Format))
+	if format == "" || format == "null" {
+		return tool.Description
+	}
+	if tool.Description == "" {
+		return "Custom tool input format: " + format
+	}
+	return tool.Description + "\n\nCustom tool input format: " + format
 }
 
 func joinToolName(prefix, name string) string {
@@ -161,16 +189,18 @@ func convertToolChoice(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	var obj struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
 	}
 	if json.Unmarshal(raw, &obj) != nil {
 		return raw
 	}
-	if obj.Type == "function" && obj.Name != "" {
+	if (obj.Type == "function" || obj.Type == "custom") && obj.Name != "" {
+		name := joinToolName(obj.Namespace, obj.Name)
 		b, _ := json.Marshal(map[string]any{
 			"type":     "function",
-			"function": map[string]string{"name": obj.Name},
+			"function": map[string]string{"name": name},
 		})
 		return b
 	}
@@ -204,7 +234,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 	outputCallIDs := make(map[string]struct{})
 	for _, it := range items {
-		if it.Type == "function_call_output" && it.CallID != "" {
+		if (it.Type == "function_call_output" || it.Type == "custom_tool_call_output") && it.CallID != "" {
 			outputCallIDs[it.CallID] = struct{}{}
 		}
 	}
@@ -231,22 +261,26 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 		deferredMessages = deferredMessages[:0]
 	}
 
-	for _, it := range items {
-		if it.Type != "function_call" {
+	for i, it := range items {
+		if it.Type != "function_call" && it.Type != "custom_tool_call" {
 			toolMsg = nil
 		}
 		switch it.Type {
-		case "function_call":
+		case "function_call", "custom_tool_call":
 			name := it.Name
 			if it.Namespace != "" {
 				name = joinToolName(it.Namespace, it.Name)
+			}
+			arguments := it.Arguments
+			if it.Type == "custom_tool_call" {
+				arguments = wrapCustomToolInput(it.Input)
 			}
 			call := protocol.ChatToolCall{
 				ID:   it.CallID,
 				Type: "function",
 				Function: protocol.ChatToolCallFunction{
 					Name:      name,
-					Arguments: it.Arguments,
+					Arguments: arguments,
 				},
 			}
 			if toolMsg == nil {
@@ -268,7 +302,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				awaitingToolOutputs[it.CallID] = struct{}{}
 			}
 
-		case "function_call_output":
+		case "function_call_output", "custom_tool_call_output":
 			out = append(out, protocol.ChatMessage{
 				Role:       "tool",
 				ToolCallID: it.CallID,
@@ -282,7 +316,10 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 		case "reasoning":
 			pendingReasoning = summaryText(it.Summary)
 
-		default: // "" 或 "message"
+		case "", "message":
+			if it.Role == "" {
+				return nil, fmt.Errorf("input message at index %d is missing role", i)
+			}
 			role := mapRole(it.Role)
 			content := extractText(it.Content)
 			msg := protocol.ChatMessage{Role: role, Content: content}
@@ -296,11 +333,37 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 				pendingReasoning = ""
 			}
 			appendRegularMessage(msg)
+
+		default:
+			return nil, fmt.Errorf("unsupported input item type %q at index %d", it.Type, i)
 		}
 	}
 
 	flushDeferredMessages()
 	return out, nil
+}
+
+func wrapCustomToolInput(input string) string {
+	b, err := json.Marshal(struct {
+		Input string `json:"input"`
+	}{Input: input})
+	if err != nil {
+		return `{"input":""}`
+	}
+	return string(b)
+}
+
+func unwrapCustomToolInput(arguments string) string {
+	if strings.TrimSpace(arguments) == "" {
+		return ""
+	}
+	var wrapped struct {
+		Input *string `json:"input"`
+	}
+	if json.Unmarshal([]byte(arguments), &wrapped) == nil && wrapped.Input != nil {
+		return *wrapped.Input
+	}
+	return arguments
 }
 
 // lookupCall / lookupContent 是 ReasoningSource 的 nil 安全包装。

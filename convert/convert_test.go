@@ -73,6 +73,151 @@ func TestRequestTools(t *testing.T) {
 	}
 }
 
+func TestRequestCustomTool(t *testing.T) {
+	body := `{
+      "model":"m",
+      "input":[
+        {"role":"user","content":"apply this patch"},
+        {"type":"custom_tool_call","call_id":"call_1","name":"apply_patch","input":"*** Begin Patch\n+line with \"quotes\"\n*** End Patch"},
+        {"type":"custom_tool_call_output","call_id":"call_1","output":"Done"}
+      ],
+      "tools":[{
+        "type":"custom",
+        "name":"apply_patch",
+        "description":"Apply a patch",
+        "format":{"type":"grammar","syntax":"lark","definition":"root: /.+/"}
+      }],
+      "tool_choice":{"type":"custom","name":"apply_patch"}
+    }`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, tools, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Tools) != 1 {
+		t.Fatalf("custom tool count = %d, want 1", len(chat.Tools))
+	}
+	tool := chat.Tools[0]
+	if tool.Type != "function" || tool.Function.Name != "apply_patch" ||
+		!strings.Contains(tool.Function.Description, "Apply a patch") ||
+		!strings.Contains(tool.Function.Description, `"type":"grammar"`) {
+		t.Fatalf("custom tool was not converted to a Chat function: %+v", tool)
+	}
+	var schema struct {
+		Type       string `json:"type"`
+		Properties struct {
+			Input struct {
+				Type string `json:"type"`
+			} `json:"input"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(tool.Function.Parameters, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Type != "object" || schema.Properties.Input.Type != "string" ||
+		len(schema.Required) != 1 || schema.Required[0] != "input" {
+		t.Fatalf("custom tool schema = %+v", schema)
+	}
+	if ref := tools["apply_patch"]; ref.Type != "custom" || ref.Name != "apply_patch" {
+		t.Fatalf("custom tool mapping = %+v", ref)
+	}
+	if !strings.Contains(string(chat.ToolChoice), `"function":{"name":"apply_patch"}`) {
+		t.Fatalf("custom tool_choice = %s", chat.ToolChoice)
+	}
+	if len(chat.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3: %+v", len(chat.Messages), chat.Messages)
+	}
+	call := chat.Messages[1].ToolCalls[0]
+	if call.ID != "call_1" || call.Function.Name != "apply_patch" {
+		t.Fatalf("custom call identity = %+v", call)
+	}
+	wantInput := "*** Begin Patch\n+line with \"quotes\"\n*** End Patch"
+	if got := unwrapCustomToolInput(call.Function.Arguments); got != wantInput {
+		t.Fatalf("custom call input = %q, want %q; arguments=%s", got, wantInput, call.Function.Arguments)
+	}
+	result := chat.Messages[2]
+	if result.Role != "tool" || result.ToolCallID != "call_1" || result.Content != "Done" {
+		t.Fatalf("custom tool output = %+v", result)
+	}
+}
+
+func TestNamespacedCustomToolRoundTrip(t *testing.T) {
+	body := `{
+      "model":"m",
+      "input":[{"type":"custom_tool_call","call_id":"call_1","namespace":"shell","name":"exec","input":"pwd"}],
+      "tools":[{"type":"namespace","name":"shell","tools":[{"type":"custom","name":"exec"}]}],
+      "tool_choice":{"type":"custom","namespace":"shell","name":"exec"}
+    }`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, tools, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Tools) != 1 || chat.Tools[0].Function.Name != "shell__exec" {
+		t.Fatalf("namespaced custom tool = %+v", chat.Tools)
+	}
+	if !strings.Contains(string(chat.ToolChoice), `"function":{"name":"shell__exec"}`) {
+		t.Fatalf("namespaced custom tool_choice = %s", chat.ToolChoice)
+	}
+	if got := chat.Messages[0].ToolCalls[0].Function.Name; got != "shell__exec" {
+		t.Fatalf("namespaced custom call name = %q", got)
+	}
+	ref := tools["shell__exec"]
+	if ref.Type != "custom" || ref.Namespace != "shell" || ref.Name != "exec" {
+		t.Fatalf("namespaced custom mapping = %+v", ref)
+	}
+
+	chatResp := &protocol.ChatResponse{
+		ID: "chatcmpl-x", Model: "m",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
+				ID:       "call_2",
+				Function: protocol.ChatToolCallFunction{Name: "shell__exec", Arguments: `{"input":"ls"}`},
+			}}},
+			FinishReason: "tool_calls",
+		}},
+	}
+	call := ChatToResponses(chatResp, tools).Output[0]
+	if call.Type != "custom_tool_call" || call.Name != "exec" || call.Namespace != "shell" ||
+		call.Input == nil || *call.Input != "ls" {
+		t.Fatalf("restored namespaced custom call = %+v", call)
+	}
+}
+
+func TestRequestRejectsUnsupportedInputItem(t *testing.T) {
+	body := `{"model":"m","input":[{"type":"web_search_call","id":"ws_1"}]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := ResponsesToChat(&req, nil)
+	if err == nil {
+		t.Fatal("unsupported input item should fail instead of producing an empty Chat message")
+	}
+	if !strings.Contains(err.Error(), `unsupported input item type "web_search_call" at index 0`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRequestRejectsMessageWithoutRole(t *testing.T) {
+	body := `{"model":"m","input":[{"type":"message","content":"orphan"}]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := ResponsesToChat(&req, nil)
+	if err == nil || !strings.Contains(err.Error(), "missing role") {
+		t.Fatalf("message without role error = %v", err)
+	}
+}
+
 func TestRequestResponseFormatJSONSchema(t *testing.T) {
 	body := `{
       "model":"m",
@@ -757,6 +902,197 @@ func TestResponseToolsAndReasoning(t *testing.T) {
 	fc := resp.Output[1]
 	if fc.Type != "function_call" || fc.CallID != "call_9" || fc.Name != "get_weather" {
 		t.Errorf("function_call 输出项不对: %+v", fc)
+	}
+}
+
+func TestResponseCustomToolRestored(t *testing.T) {
+	tools := map[string]NamespacedTool{
+		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	}
+	chat := &protocol.ChatResponse{
+		ID: "chatcmpl-x", Created: 1, Model: "m",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
+				ID: "call_9", Type: "function",
+				Function: protocol.ChatToolCallFunction{
+					Name:      "apply_patch",
+					Arguments: wrapCustomToolInput("*** Begin Patch\n*** End Patch"),
+				},
+			}}},
+			FinishReason: "tool_calls",
+		}},
+	}
+	resp := ChatToResponses(chat, tools)
+	if len(resp.Output) != 1 {
+		t.Fatalf("output count = %d, want 1: %+v", len(resp.Output), resp.Output)
+	}
+	call := resp.Output[0]
+	if call.Type != "custom_tool_call" || call.CallID != "call_9" || call.Name != "apply_patch" {
+		t.Fatalf("custom tool identity = %+v", call)
+	}
+	if call.Input == nil || *call.Input != "*** Begin Patch\n*** End Patch" || call.Arguments != "" {
+		t.Fatalf("custom input was not restored: %+v", call)
+	}
+	if !strings.HasPrefix(call.ID, "ctc_") {
+		t.Fatalf("custom item id = %q, want ctc_ prefix", call.ID)
+	}
+}
+
+func TestResponseCustomToolKeepsEmptyInput(t *testing.T) {
+	tools := map[string]NamespacedTool{
+		"custom": {Type: "custom", Name: "custom"},
+	}
+	chat := &protocol.ChatResponse{
+		ID: "chatcmpl-empty", Model: "m",
+		Choices: []protocol.ChatChoice{{
+			Message: protocol.ChatMessage{Role: "assistant", ToolCalls: []protocol.ChatToolCall{{
+				ID:       "call_empty",
+				Function: protocol.ChatToolCallFunction{Name: "custom", Arguments: `{"input":""}`},
+			}}},
+			FinishReason: "tool_calls",
+		}},
+	}
+	wire, err := json.Marshal(ChatToResponses(chat, tools))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"type":"custom_tool_call"`) ||
+		!strings.Contains(string(wire), `"input":""`) {
+		t.Fatalf("empty custom input must remain present: %s", wire)
+	}
+}
+
+func TestUnwrapCustomToolInputFallback(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args string
+		want string
+	}{
+		{name: "wrapped", args: `{"input":"pwd"}`, want: "pwd"},
+		{name: "raw", args: "pwd", want: "pwd"},
+		{name: "other object", args: `{"command":"pwd"}`, want: `{"command":"pwd"}`},
+		{name: "empty", args: "", want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unwrapCustomToolInput(tt.args); got != tt.want {
+				t.Fatalf("unwrapCustomToolInput(%q) = %q, want %q", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStreamCustomToolRestored(t *testing.T) {
+	tools := map[string]NamespacedTool{
+		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	}
+	raw := "data: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"apply_patch","arguments":"{\"input\":\"*** Begin"}}]}}]}` +
+		"\n\ndata: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":" Patch***\"}"}}]},"finish_reason":"tool_calls"}]}` +
+		"\n\ndata: [DONE]\n\n"
+
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", tools); err != nil {
+		t.Fatal(err)
+	}
+	payloads := parseSSEPayloads(t, s.b.String())
+	seen := map[string]map[string]any{}
+	for _, payload := range payloads {
+		if typ, _ := payload["type"].(string); typ != "" {
+			seen[typ] = payload
+		}
+	}
+	added := seen["response.output_item.added"]
+	if added == nil {
+		t.Fatal("missing response.output_item.added")
+	}
+	addedItem := added["item"].(map[string]any)
+	if addedItem["type"] != "custom_tool_call" || addedItem["name"] != "apply_patch" {
+		t.Fatalf("custom added item = %+v", addedItem)
+	}
+	delta := seen["response.custom_tool_call_input.delta"]
+	if delta == nil || delta["delta"] != "*** Begin Patch***" {
+		t.Fatalf("custom input delta = %+v", delta)
+	}
+	done := seen["response.custom_tool_call_input.done"]
+	if done == nil || done["input"] != "*** Begin Patch***" {
+		t.Fatalf("custom input done = %+v", done)
+	}
+	itemDone := seen["response.output_item.done"]
+	if itemDone == nil {
+		t.Fatal("missing response.output_item.done")
+	}
+	doneItem := itemDone["item"].(map[string]any)
+	if doneItem["type"] != "custom_tool_call" || doneItem["input"] != "*** Begin Patch***" {
+		t.Fatalf("custom completed item = %+v", doneItem)
+	}
+	if strings.Contains(s.b.String(), "response.function_call_arguments") {
+		t.Fatalf("custom tool must not emit function argument events:\n%s", s.b.String())
+	}
+}
+
+func TestStreamCustomToolWaitsForLateName(t *testing.T) {
+	tools := map[string]NamespacedTool{
+		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	}
+	raw := "data: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"arguments":"{\"input\":\"pwd"}}]}}]}` +
+		"\n\ndata: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"apply_patch","arguments":"\"}"}}]},"finish_reason":"tool_calls"}]}` +
+		"\n\ndata: [DONE]\n\n"
+
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", tools); err != nil {
+		t.Fatal(err)
+	}
+	payloads := parseSSEPayloads(t, s.b.String())
+	for _, payload := range payloads {
+		if payload["type"] != "response.output_item.added" {
+			continue
+		}
+		item := payload["item"].(map[string]any)
+		if item["type"] != "custom_tool_call" || item["name"] != "apply_patch" || item["call_id"] != "call_1" {
+			t.Fatalf("late-name custom added item = %+v", item)
+		}
+		return
+	}
+	t.Fatalf("missing custom output_item.added:\n%s", s.b.String())
+}
+
+func TestStreamCustomToolSynthesizesMissingCallID(t *testing.T) {
+	tools := map[string]NamespacedTool{
+		"apply_patch": {Type: "custom", Name: "apply_patch"},
+	}
+	raw := "data: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"apply_patch","arguments":"{\"input\":\"pwd\"}"}}]},"finish_reason":"tool_calls"}]}` +
+		"\n\ndata: [DONE]\n\n"
+
+	var s sink
+	result, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ToolCallIDs) != 1 || !strings.HasPrefix(result.ToolCallIDs[0], "call_") {
+		t.Fatalf("synthesized call IDs = %+v", result.ToolCallIDs)
+	}
+	if !strings.Contains(s.b.String(), `"type":"custom_tool_call"`) ||
+		!strings.Contains(s.b.String(), `"call_id":"`+result.ToolCallIDs[0]+`"`) {
+		t.Fatalf("synthesized custom call ID missing from stream:\n%s", s.b.String())
+	}
+}
+
+func TestStreamToolWithoutNameFails(t *testing.T) {
+	raw := "data: " +
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"arguments":"{}"}}]},"finish_reason":"tool_calls"}]}` +
+		"\n\ndata: [DONE]\n\n"
+
+	var s sink
+	if _, err := StreamChatToResponses(context.Background(), &s, strings.NewReader(raw), "m", nil); err == nil {
+		t.Fatal("tool call without a name should fail")
+	}
+	if !strings.Contains(s.b.String(), "event: response.failed") ||
+		strings.Contains(s.b.String(), "event: response.completed") {
+		t.Fatalf("missing-name tool call should fail without completing:\n%s", s.b.String())
 	}
 }
 

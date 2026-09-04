@@ -8,8 +8,8 @@ import (
 
 // ChatToResponses 把一个非流式 Chat Completions 响应转换为 Responses API 响应。
 // 输出项顺序：reasoning -> message(文本) -> function_call(工具调用)。
-// namespaces 是「扁平工具名 -> (命名空间, 本地名)」映射(见 ToolNamespaces)，用于把
-// MCP 工具的 function_call 从上游扁平名拆回本地名 + namespace；非命名空间工具传 nil 即可。
+// namespaces maps Chat tool names back to their original Responses identity,
+// including namespace and custom tool type.
 func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedTool) *protocol.ResponsesResponse {
 	id := stripPrefix(c.ID)
 
@@ -65,18 +65,30 @@ func ChatToResponses(c *protocol.ChatResponse, namespaces map[string]NamespacedT
 		})
 	}
 
-	// 3) function_call：每个工具调用转为一个 function_call 输出项。
-	// 命名空间工具要把上游扁平名拆回本地名 + namespace(见 ToolNamespaces)。
+	// 3) Restore each Chat tool call to its original Responses tool type.
 	for i, tc := range msg.ToolCalls {
-		name, namespace := splitToolName(tc.Function.Name, namespaces)
+		ref := resolveTool(tc.Function.Name, namespaces)
+		if ref.Type == "custom" {
+			input := unwrapCustomToolInput(tc.Function.Arguments)
+			output = append(output, protocol.OutputItem{
+				Type:      "custom_tool_call",
+				ID:        customCallItemID(id, i),
+				Status:    "completed",
+				CallID:    tc.ID,
+				Name:      ref.Name,
+				Input:     &input,
+				Namespace: ref.Namespace,
+			})
+			continue
+		}
 		output = append(output, protocol.OutputItem{
 			Type:      "function_call",
 			ID:        callItemID(id, i),
 			Status:    "completed",
 			CallID:    tc.ID,
-			Name:      name,
+			Name:      ref.Name,
 			Arguments: tc.Function.Arguments,
-			Namespace: namespace,
+			Namespace: ref.Namespace,
 		})
 	}
 
@@ -138,15 +150,27 @@ func mapFinishReason(reason string) (status, incompleteReason string) {
 // splitToolName 把上游的扁平工具名拆成 (本地名, 命名空间)。
 // 命中 namespaces 映射的(MCP 工具)返回本地名 + 命名空间；其余原样返回、namespace 为空。
 func splitToolName(flat string, namespaces map[string]NamespacedTool) (name, namespace string) {
-	if ref, ok := namespaces[flat]; ok {
-		return ref.Name, ref.Namespace
+	ref := resolveTool(flat, namespaces)
+	return ref.Name, ref.Namespace
+}
+
+func resolveTool(flat string, tools map[string]NamespacedTool) NamespacedTool {
+	if ref, ok := tools[flat]; ok {
+		if ref.Type == "" {
+			ref.Type = "function"
+		}
+		return ref
 	}
-	return flat, ""
+	return NamespacedTool{Type: "function", Name: flat}
 }
 
 // callItemID 为第 i 个工具调用生成 function_call 输出项的 id。
 func callItemID(base string, i int) string {
 	return "fc_" + base + "_" + strconv.Itoa(i)
+}
+
+func customCallItemID(base string, i int) string {
+	return "ctc_" + base + "_" + strconv.Itoa(i)
 }
 
 // stripPrefix 去掉上游 id 里常见的 "chatcmpl-" 前缀，方便拼成 resp_/msg_ 形式。
