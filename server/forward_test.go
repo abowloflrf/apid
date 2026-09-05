@@ -33,6 +33,41 @@ func forwardConfig(path string, proto config.Protocol, upstreamURL, upstreamPath
 	}
 }
 
+func TestCustomRequestBodyLimit(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer up.Close()
+
+	cfg := forwardConfig("/v1/chat/completions", config.ProtoChat, up.URL, "/v1/chat/completions", "")
+	cfg.MaxRequestBody = 8
+	srv := New(cfg, nil, nil)
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name          string
+		contentLength int64
+	}{
+		{name: "known length", contentLength: 9},
+		{name: "unknown length", contentLength: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("123456789"))
+			req.ContentLength = tc.contentLength
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if calls != 0 {
+		t.Fatalf("upstream calls = %d, want 0", calls)
+	}
+}
+
 // TestForwardChatNonStream：chat->chat 纯转发非流式，断言字节原样透传 + usage 提取。
 func TestForwardChatNonStream(t *testing.T) {
 	const upstreamBody = `{"id":"x","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":7,"completion_tokens":4,"total_tokens":11,"prompt_tokens_details":{"cached_tokens":3}}}`

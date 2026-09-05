@@ -692,6 +692,145 @@ func TestRequestContentBlockArray(t *testing.T) {
 	}
 }
 
+func TestRequestImageContent(t *testing.T) {
+	body := `{"model":"m","input":[
+      {"role":"user","content":[
+        {"type":"input_text","text":"before"},
+        {"type":"input_image","image_url":"data:image/png;base64,AA==","detail":"original"},
+        {"type":"input_text","text":"after"}
+      ]},
+      {"type":"input_image","file_id":"file_image_1","detail":"low"}
+    ]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2: %+v", len(chat.Messages), chat.Messages)
+	}
+	first := chat.Messages[0]
+	if first.Content != "beforeafter" || len(first.ContentParts) != 3 {
+		t.Fatalf("multimodal content = %+v", first)
+	}
+	if image := first.ContentParts[1].ImageURL; image == nil || image.URL != "data:image/png;base64,AA==" || image.Detail != "high" {
+		t.Fatalf("message image = %+v", image)
+	}
+	second := chat.Messages[1]
+	if len(second.ContentParts) != 1 || second.ContentParts[0].ImageURL == nil ||
+		second.ContentParts[0].ImageURL.FileID != "file_image_1" || second.ContentParts[0].ImageURL.Detail != "low" {
+		t.Fatalf("standalone image = %+v", second)
+	}
+
+	wire, err := json.Marshal(chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"content":[{"type":"text","text":"before"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AA==","detail":"high"}},{"type":"text","text":"after"}]`) {
+		t.Fatalf("multimodal request was not serialized as Chat content parts: %s", wire)
+	}
+	if !strings.Contains(string(wire), `"image_url":{"file_id":"file_image_1","detail":"low"}`) {
+		t.Fatalf("file-backed image was not preserved: %s", wire)
+	}
+}
+
+func TestRequestToolOutputImages(t *testing.T) {
+	body := `{"model":"m","input":[
+      {"type":"function_call","call_id":"c1","name":"capture","arguments":"{}"},
+      {"type":"custom_tool_call","call_id":"c2","name":"render","input":"draw"},
+      {"type":"tool_search_call","call_id":"c3","name":"tool_search","arguments":{"query":"image"}},
+      {"type":"function_call_output","call_id":"c1","output":[
+        {"type":"input_text","text":"screenshot"},
+        {"type":"input_image","image_url":"data:image/png;base64,FIRST","detail":"high"}
+      ]},
+      {"type":"custom_tool_call_output","call_id":"c2","output":"{\"content\":[{\"type\":\"image_url\",\"image_url\":{\"url\":\"https://example.com/render.png\"}}]}"},
+      {"type":"tool_search_output","call_id":"c3","status":"completed","output":{"content":[
+        {"type":"image","mimeType":"image/webp","data":"THIRD"}
+      ]}}
+    ]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 5 {
+		t.Fatalf("message count = %d, want assistant + 3 tools + media: %+v", len(chat.Messages), chat.Messages)
+	}
+	for i := 1; i <= 3; i++ {
+		if chat.Messages[i].Role != "tool" {
+			t.Fatalf("message %d role = %q, want tool", i, chat.Messages[i].Role)
+		}
+	}
+	media := chat.Messages[4]
+	if media.Role != "user" || len(media.ContentParts) != 6 {
+		t.Fatalf("synthetic media message = %+v", media)
+	}
+	wantURLs := []string{
+		"data:image/png;base64,FIRST",
+		"https://example.com/render.png",
+		"data:image/webp;base64,THIRD",
+	}
+	for i, want := range wantURLs {
+		image := media.ContentParts[i*2+1].ImageURL
+		if image == nil || image.URL != want {
+			t.Fatalf("media image %d = %+v, want %q", i, image, want)
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		if strings.Contains(chat.Messages[i].Content, "FIRST") ||
+			strings.Contains(chat.Messages[i].Content, "render.png") ||
+			strings.Contains(chat.Messages[i].Content, "THIRD") {
+			t.Fatalf("tool message %d still contains image payload: %s", i, chat.Messages[i].Content)
+		}
+	}
+	if !strings.Contains(chat.Messages[3].Content, toolResultMediaMovedMarker) {
+		t.Fatalf("tool_search cleaned output missing marker: %s", chat.Messages[3].Content)
+	}
+}
+
+func TestRequestRawDataURLToolOutput(t *testing.T) {
+	body := `{"model":"m","input":[
+      {"type":"function_call","call_id":"c1","name":"capture","arguments":"{}"},
+      {"type":"function_call_output","call_id":"c1","output":"data:image/gif;base64,R0lGODlh"}
+    ]}`
+	var req protocol.ResponsesRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	chat, _, err := ResponsesToChat(&req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chat.Messages) != 3 || chat.Messages[1].Content != toolResultMediaMovedMarker {
+		t.Fatalf("raw data URL tool output = %+v", chat.Messages)
+	}
+	image := chat.Messages[2].ContentParts[1].ImageURL
+	if image == nil || image.URL != "data:image/gif;base64,R0lGODlh" {
+		t.Fatalf("raw data URL image = %+v", image)
+	}
+}
+
+func TestRequestAnthropicToolOutputImage(t *testing.T) {
+	raw := json.RawMessage(`{"content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"IMAGE"}}]}`)
+	plan := planToolOutputMedia(raw)
+	if plan == nil || len(plan.media) != 1 {
+		t.Fatalf("Anthropic image plan = %+v", plan)
+	}
+	image := plan.media[0].ImageURL
+	if image == nil || image.URL != "data:image/jpeg;base64,IMAGE" {
+		t.Fatalf("Anthropic image = %+v", image)
+	}
+	if strings.Contains(plan.content, "IMAGE") || !strings.Contains(plan.content, toolResultMediaMovedMarker) {
+		t.Fatalf("cleaned tool content = %s", plan.content)
+	}
+}
+
 func TestRequestDeveloperRole(t *testing.T) {
 	// Not all Chat Completions providers accept the developer role, so use user.
 	body := `{"model":"m","input":[{"role":"developer","content":"开发者指令"}]}`

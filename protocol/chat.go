@@ -41,19 +41,49 @@ type ChatJSONSchema struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-// ChatMessage 是一条聊天消息。
-// 本项目内部 content 统一为纯字符串；assistant 的工具调用放在 ToolCalls，
-// 工具结果用 role=="tool" + ToolCallID 表达。
+// ChatMessage is one request or response message. Content remains the normalized
+// text used by response conversion; request messages set ContentParts when they
+// need native multimodal content.
 // 上游响应里 content 可能是字符串、内容块数组或缺省(配 refusal)，
 // 这些形态由 UnmarshalJSON 归一(见 chat_reasoning.go)。
 type ChatMessage struct {
-	Role             string         `json:"role"`
-	Content          string         `json:"content"`
-	Refusal          string         `json:"refusal,omitempty"`
-	Name             string         `json:"name,omitempty"`
-	ToolCalls        []ChatToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string         `json:"tool_call_id,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	Role             string            `json:"role"`
+	Content          string            `json:"content"`
+	ContentParts     []ChatContentPart `json:"-"`
+	Refusal          string            `json:"refusal,omitempty"`
+	Name             string            `json:"name,omitempty"`
+	ToolCalls        []ChatToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+}
+
+// ChatContentPart is a text or image part accepted in Chat user messages.
+type ChatContentPart struct {
+	Type     string        `json:"type"`
+	Text     string        `json:"text,omitempty"`
+	ImageURL *ChatImageURL `json:"image_url,omitempty"`
+}
+
+// ChatImageURL accepts the standard URL form and the file_id extension used by
+// some OpenAI-compatible providers.
+type ChatImageURL struct {
+	URL    string `json:"url,omitempty"`
+	FileID string `json:"file_id,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// MarshalJSON emits an array only for request messages carrying multimodal
+// parts. Text-only messages keep their original string representation.
+func (m ChatMessage) MarshalJSON() ([]byte, error) {
+	type alias ChatMessage
+	content := any(m.Content)
+	if len(m.ContentParts) > 0 {
+		content = m.ContentParts
+	}
+	return json.Marshal(struct {
+		alias
+		Content any `json:"content"`
+	}{alias: alias(m), Content: content})
 }
 
 // ChatTool 是请求里声明的一个函数工具。

@@ -293,7 +293,7 @@ func TestSubscriptionRejectsKnownOversizedRequestBeforeForwarding(t *testing.T) 
 	})
 	srv := newSubscriptionTestServer(t, "", "", rt, nil)
 	req := httptest.NewRequest(http.MethodPost, "/codex/v1/responses", strings.NewReader(`{}`))
-	req.ContentLength = maxRequestBody + 1
+	req.ContentLength = config.DefaultMaxRequestBody + 1
 	req.Header.Set("Authorization", "Bearer token")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

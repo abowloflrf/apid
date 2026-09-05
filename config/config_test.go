@@ -513,6 +513,7 @@ func isolateEnv(t *testing.T) {
 	t.Setenv("APID_TRACE_DIR", "")
 	t.Setenv("APID_SHUTDOWN_TIMEOUT", "")
 	t.Setenv("APID_CODEX_SSE_IDLE_TIMEOUT", "")
+	t.Setenv("APID_MAX_REQUEST_BODY", "")
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -532,6 +533,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CodexSSEIdleTimeout != 5*time.Minute {
 		t.Errorf("CodexSSEIdleTimeout = %s, want 5m", cfg.CodexSSEIdleTimeout)
+	}
+	if cfg.MaxRequestBody != DefaultMaxRequestBody {
+		t.Errorf("MaxRequestBody = %d, want %d", cfg.MaxRequestBody, DefaultMaxRequestBody)
 	}
 	if cfg.ClientAPIKey != "" {
 		t.Errorf("ClientAPIKey = %q, want empty", cfg.ClientAPIKey)
@@ -651,6 +655,27 @@ func TestLoadShutdownTimeout(t *testing.T) {
 			t.Setenv("APID_SHUTDOWN_TIMEOUT", value)
 			if _, err := Load(writeTOML(t, minimalTOML)); err == nil {
 				t.Fatalf("APID_SHUTDOWN_TIMEOUT=%q should fail", value)
+			}
+		})
+	}
+}
+
+func TestLoadMaxRequestBody(t *testing.T) {
+	isolateEnv(t)
+	t.Setenv("APID_MAX_REQUEST_BODY", "104857600")
+	cfg, err := Load(writeTOML(t, minimalTOML))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MaxRequestBody != 100*1024*1024 {
+		t.Fatalf("MaxRequestBody = %d, want 100 MiB", cfg.MaxRequestBody)
+	}
+
+	for _, value := range []string{"invalid", "0", "-1"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("APID_MAX_REQUEST_BODY", value)
+			if _, err := Load(writeTOML(t, minimalTOML)); err == nil {
+				t.Fatalf("APID_MAX_REQUEST_BODY=%q should fail", value)
 			}
 		})
 	}

@@ -13,6 +13,7 @@ import (
 //     兼容 vLLM/DeepSeek(reasoning_content)、OpenRouter(reasoning 字符串)及结构化 reasoning。
 func (m *ChatMessage) UnmarshalJSON(data []byte) error {
 	type alias ChatMessage // 借别名避免递归调用本方法
+	m.ContentParts = nil
 	// 用 RawMessage 接住 content，避免数组形态炸掉整次解析；其余字段经嵌入的
 	// alias 直接落到 m 上(content 字段被浅层的 RawMessage 遮蔽，不会写进 m)。
 	aux := struct {

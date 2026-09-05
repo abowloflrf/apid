@@ -54,7 +54,6 @@ func (h streamHint) String() string {
 // abnormally large or malicious payloads; normal LLM requests are well
 // under these thresholds.
 const (
-	maxRequestBody   = 10 * 1024 * 1024 // 10 MB - client request body
 	maxResponseBody  = 10 * 1024 * 1024 // 10 MB - upstream non-stream response body
 	maxErrorBodySize = 1 * 1024 * 1024  // 1 MB  - upstream error response body
 )

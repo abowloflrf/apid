@@ -313,20 +313,42 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 	pendingReasoning := ""
 	// toolMsg 指向当前正在累积工具调用的 assistant 消息，连续 function_call 合并进同一条。
 	var toolMsg *protocol.ChatMessage
+	// Chat tool messages cannot carry images. Media extracted from a result batch
+	// is emitted as one synthetic user message immediately after all tool outputs.
+	var pendingMedia []protocol.ChatContentPart
 	// Providers commonly require assistant(tool_calls) and matching tool outputs to be adjacent.
 	// Defer intervening messages only when a matching output exists later in this request.
 	awaitingToolOutputs := make(map[string]struct{})
 	deferredMessages := make([]protocol.ChatMessage, 0)
+	flushPendingMedia := func() {
+		if len(pendingMedia) == 0 {
+			return
+		}
+		out = append(out, protocol.ChatMessage{Role: "user", ContentParts: pendingMedia})
+		pendingMedia = nil
+	}
 	appendRegularMessage := func(msg protocol.ChatMessage) {
 		if len(awaitingToolOutputs) > 0 {
 			deferredMessages = append(deferredMessages, msg)
 			return
 		}
+		flushPendingMedia()
 		out = append(out, msg)
 	}
 	flushDeferredMessages := func() {
+		flushPendingMedia()
 		out = append(out, deferredMessages...)
 		deferredMessages = deferredMessages[:0]
+	}
+	queueToolMedia := func(callID string, media []protocol.ChatContentPart) {
+		if len(media) == 0 {
+			return
+		}
+		pendingMedia = append(pendingMedia, protocol.ChatContentPart{
+			Type: "text",
+			Text: fmt.Sprintf("[apid: media output of tool call %s]", callID),
+		})
+		pendingMedia = append(pendingMedia, media...)
 	}
 
 	for i, it := range items {
@@ -381,8 +403,14 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 
 		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			content := extractText(it.Output)
+			var cleanedOutput json.RawMessage
+			if plan := planToolOutputMedia(it.Output); plan != nil {
+				content = plan.content
+				cleanedOutput = plan.output
+				queueToolMedia(it.CallID, plan.media)
+			}
 			if it.Type == "tool_search_output" {
-				content = toolSearchOutputContent(it)
+				content = toolSearchOutputContent(it, cleanedOutput)
 			}
 			out = append(out, protocol.ChatMessage{
 				Role:       "tool",
@@ -400,13 +428,24 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 		case "additional_tools":
 			// Declarations were merged into Chat tools before parsing history.
 
+		case "input_text", "input_image":
+			role := mapRole(it.Role)
+			if role == "" {
+				role = "user"
+			}
+			content, parts := responsesPartsToChat([]protocol.InputContentPart{{
+				Type: it.Type, Text: it.Text, ImageURL: it.ImageURL,
+				FileID: it.FileID, Detail: it.Detail,
+			}})
+			appendRegularMessage(protocol.ChatMessage{Role: role, Content: content, ContentParts: parts})
+
 		case "", "message":
 			if it.Role == "" {
 				return nil, fmt.Errorf("input message at index %d is missing role", i)
 			}
 			role := mapRole(it.Role)
-			content := extractText(it.Content)
-			msg := protocol.ChatMessage{Role: role, Content: content}
+			content, parts := responsesContentToChat(it.Content)
+			msg := protocol.ChatMessage{Role: role, Content: content, ContentParts: parts}
 			if role == "assistant" {
 				// 按 assistant 文本指纹取回原文，未命中用摘要兜底。
 				rc := lookupContent(src, content)
@@ -423,6 +462,7 @@ func parseInput(raw json.RawMessage, src ReasoningSource) ([]protocol.ChatMessag
 		}
 	}
 
+	flushPendingMedia()
 	flushDeferredMessages()
 	return out, nil
 }
@@ -442,7 +482,7 @@ func chatToolArguments(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func toolSearchOutputContent(item protocol.InputItem) string {
+func toolSearchOutputContent(item protocol.InputItem, output json.RawMessage) string {
 	b, err := json.Marshal(struct {
 		Type      string                   `json:"type"`
 		ID        string                   `json:"id,omitempty"`
@@ -450,6 +490,7 @@ func toolSearchOutputContent(item protocol.InputItem) string {
 		Execution string                   `json:"execution,omitempty"`
 		Status    string                   `json:"status,omitempty"`
 		Tools     []protocol.ResponsesTool `json:"tools"`
+		Output    json.RawMessage          `json:"output,omitempty"`
 	}{
 		Type:      "tool_search_output",
 		ID:        item.ID,
@@ -457,6 +498,7 @@ func toolSearchOutputContent(item protocol.InputItem) string {
 		Execution: item.Execution,
 		Status:    item.Status,
 		Tools:     item.Tools,
+		Output:    output,
 	})
 	if err != nil {
 		return `{"type":"tool_search_output","tools":[]}`

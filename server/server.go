@@ -77,6 +77,7 @@ type Server struct {
 	sessions                   *session.Loader  // agent session listing, for GET /stats/sessions
 	subscriptionRoutes         map[string]bool  // paths whose Authorization is an upstream credential
 	subscriptionSSEIdleTimeout time.Duration
+	maxRequestBody             int64
 }
 
 // New builds a Server. st may be nil (stats disabled); a nil logger falls back
@@ -89,6 +90,10 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 	subscriptionSSEIdleTimeout := cfg.CodexSSEIdleTimeout
 	if subscriptionSSEIdleTimeout <= 0 {
 		subscriptionSSEIdleTimeout = defaultSubscriptionSSEIdleTimeout
+	}
+	maxRequestBody := cfg.MaxRequestBody
+	if maxRequestBody <= 0 {
+		maxRequestBody = config.DefaultMaxRequestBody
 	}
 	upstreams := make(map[string]*target, len(cfg.Upstreams))
 	subscriptionWarningLogged := false
@@ -145,6 +150,7 @@ func New(cfg config.Config, st *store.Store, logger *slog.Logger) *Server {
 		sessions:                   session.NewLoader(),
 		subscriptionRoutes:         subscriptionRoutes,
 		subscriptionSSEIdleTimeout: subscriptionSSEIdleTimeout,
+		maxRequestBody:             maxRequestBody,
 	}
 }
 
@@ -287,7 +293,7 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		upstreamReq = r.Clone(r.Context())
 		upstreamReq.Header = upstreamClientHeaders(r.Header)
 	}
-	if r.ContentLength > maxRequestBody {
+	if r.ContentLength > s.maxRequestBody {
 		stat.Error = "request body exceeds size limit"
 		writeError(rec, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 		return
@@ -298,7 +304,7 @@ func (s *Server) handleRoute(rt config.Route, w http.ResponseWriter, r *http.Req
 		responseController = http.NewResponseController(rec)
 		_ = responseController.SetReadDeadline(time.Now().Add(subscriptionRequestBodyReadTimeout))
 	}
-	bodyBytes, err := readLimited(r.Body, maxRequestBody)
+	bodyBytes, err := readLimited(r.Body, s.maxRequestBody)
 	if responseController != nil {
 		_ = responseController.SetReadDeadline(time.Time{})
 	}

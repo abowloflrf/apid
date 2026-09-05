@@ -1,5 +1,5 @@
 // Package protocol 定义 Responses API 与 Chat Completions API 的请求 / 响应结构。
-// 本 demo 覆盖最关键的字段：文本、工具调用(function calling)、reasoning。
+// 本 demo 覆盖最关键的字段：文本、图片输入、工具调用(function calling)、reasoning。
 package protocol
 
 import "encoding/json"
@@ -67,6 +67,11 @@ type InputItem struct {
 	ID      string          `json:"id,omitempty"`
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"`
+	Text    string          `json:"text,omitempty"`
+	// input_image
+	ImageURL json.RawMessage `json:"image_url,omitempty"`
+	FileID   string          `json:"file_id,omitempty"`
+	Detail   string          `json:"detail,omitempty"`
 	// function_call
 	CallID    string          `json:"call_id,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -86,10 +91,13 @@ type InputItem struct {
 	Summary []SummaryText `json:"summary,omitempty"`
 }
 
-// InputContentPart 对应内容块数组里的一个元素，如 {"type":"input_text","text":"..."}。
+// InputContentPart is one text or image entry in a Responses content array.
 type InputContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	ImageURL json.RawMessage `json:"image_url,omitempty"`
+	FileID   string          `json:"file_id,omitempty"`
+	Detail   string          `json:"detail,omitempty"`
 }
 
 // ---------- Responses API 响应（非流式） ----------

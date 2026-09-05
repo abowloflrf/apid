@@ -6,6 +6,8 @@
 
 范围：Codex CLI，以及经过兼容性验收的 Codex App build 使用 ChatGPT 登录时，经本地 `apid` 转发 Responses API 请求。
 
+延伸设计：面向 Pi 等普通 Responses 客户端、由 apid 自己登录并刷新凭据的方案，见 [Codex 托管 OAuth 与 Pi 接入设计](./CODEX_MANAGED_OAUTH_PI_DESIGN.md)。两种模式并存，本文的 `codex_subscription` 凭据透传语义保持不变。
+
 ## 1. 结论
 
 该能力可以在 `apid` 现有架构上实现，且不需要接管 Codex 的登录或刷新令牌逻辑。推荐方案是：

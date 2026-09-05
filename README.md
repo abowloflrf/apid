@@ -12,10 +12,10 @@ Client ⇄ Responses ⇄ apid ⇄ Responses ⇄ Upstream           (dual protoco
 Client ⇄ Messages ⇄ apid ⇄ Messages ⇄ Anthropic            (forward)
 ```
 
-**Supported**: text, function calling, reasoning. Thinking models (DeepSeek-R1,
+**Supported**: text, image input, function calling, reasoning. Thinking models (DeepSeek-R1,
 Kimi) work via a built-in reasoning-content cache that replays previous-turn
 reasoning across multi-turn conversations.
-**Not supported**: image/file input, built-in tools (web_search), annotations,
+**Not supported**: file input, built-in tools (web_search), annotations,
 multimodal output, `previous_response_id`.
 
 ## Run
@@ -33,6 +33,10 @@ Graceful shutdown waits up to 120 seconds for in-flight HTTP requests by
 default. Set `APID_SHUTDOWN_TIMEOUT` to another positive Go duration, such as
 `30s` or `3m`, when the surrounding process supervisor allows at least that
 long before forcefully terminating apid.
+
+Request bodies are limited to 64 MiB by default. Set `APID_MAX_REQUEST_BODY`
+to a positive byte count when larger inline images or stricter limits are
+needed, for example `APID_MAX_REQUEST_BODY=209715200` for 200 MiB.
 
 Providers that natively speak both OpenAI protocols only need one upstream:
 set `supports_responses = true` on an `openai_chat_completions` upstream (and
