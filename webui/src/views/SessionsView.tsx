@@ -6,7 +6,10 @@ import { SessionModal, TOOLS, fmtTime } from "../components/SessionModal";
 import type { AgentSession, SessionsResponse } from "../types";
 
 const RANGES: [string, string][] = [
-  ["24h", "24h"], ["7d", "7d"], ["30d", "30d"], ["", "all"],
+  ["24h", "24h"],
+  ["7d", "7d"],
+  ["30d", "30d"],
+  ["", "all"],
 ];
 const PAGE_SIZES = [20, 50, 100, 200];
 
@@ -36,21 +39,47 @@ function SessionRow({ s, onOpen }: RowProps) {
   return (
     <tr className="sess-row" onClick={onOpen}>
       <td className="text sess-time">
-        <time dateTime={new Date(timeMs).toISOString()} title={new Date(timeMs).toLocaleString()}>{fmtTime(timeMs)}</time>
+        <time
+          dateTime={new Date(timeMs).toISOString()}
+          title={new Date(timeMs).toLocaleString()}
+        >
+          {fmtTime(timeMs)}
+        </time>
       </td>
-      <td className="sess-tool"><span className={`tool-badge t-${s.tool}`} title={s.tool}>{TOOLS.find((t) => t.id === s.tool)?.label ?? s.tool}</span></td>
+      <td className="sess-tool">
+        <span className={`tool-badge t-${s.tool}`} title={s.tool}>
+          {TOOLS.find((t) => t.id === s.tool)?.label ?? s.tool}
+        </span>
+      </td>
       <td className="text sess-model">
-        <span className="sess-ellipsis" title={s.model}>{s.model || "-"}</span>
+        <span className="sess-ellipsis" title={s.model}>
+          {s.model || "-"}
+        </span>
       </td>
-      <td className={`tnum sess-tokens tok-${tokLevel(s.tokens_used)}`} title={s.tokens_used > 0 ? fmtInt(s.tokens_used) : undefined}>{fmtCompact(s.tokens_used)}</td>
-      <td className="sess-cache">{cacheCell(s.cache_hit_rate != null ? s.cache_hit_rate * 100 : null)}</td>
+      <td
+        className={`tnum sess-tokens tok-${tokLevel(s.tokens_used)}`}
+        title={s.tokens_used > 0 ? fmtInt(s.tokens_used) : undefined}
+      >
+        {fmtCompact(s.tokens_used)}
+      </td>
+      <td className="sess-cache">
+        {cacheCell(s.cache_hit_rate == null ? null : s.cache_hit_rate * 100)}
+      </td>
       <td className="text sess-cwd">
-        <span className="sess-ellipsis" title={s.cwd}>{s.cwd ? compactPath(s.cwd) : "-"}</span>
+        <span className="sess-ellipsis" title={s.cwd}>
+          {s.cwd ? compactPath(s.cwd) : "-"}
+        </span>
       </td>
       <td className="text sess-title">
         <span className="sess-title-cell">
-          <span className="title" title={s.title}>{s.title}</span>
-          {s.archived ? <span className="pill archived" title="archived">archived</span> : null}
+          <span className="title" title={s.title}>
+            {s.title}
+          </span>
+          {s.archived ? (
+            <span className="pill archived" title="archived">
+              archived
+            </span>
+          ) : null}
         </span>
       </td>
     </tr>
@@ -64,7 +93,7 @@ interface Props {
 export function SessionsView({ refreshKey }: Props) {
   const [tools, setTools] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [range, setRange] = useState("");
+  const [range, setRange] = useState("24h");
   const [limit, setLimit] = useState(50);
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<SessionsResponse | null>(null);
@@ -75,32 +104,37 @@ export function SessionsView({ refreshKey }: Props) {
   const stateRef = useRef({ tools, query, range, limit, offset });
   stateRef.current = { tools, query, range, limit, offset };
 
-  const load = useCallback(async (overrides?: Partial<typeof stateRef.current>) => {
-    const cur = { ...stateRef.current, ...overrides };
-    if (overrides?.offset !== undefined) setOffset(overrides.offset);
-    setLoading(true);
-    const seq = ++seqRef.current;
-    try {
-      const r = await fetchJSON<SessionsResponse>("sessions", {
-        tool: cur.tools.length ? cur.tools : undefined,
-        q: cur.query || undefined,
-        since: cur.range || undefined,
-        sort: "created",
-        limit: cur.limit,
-        offset: cur.offset,
-        archived: "0",
-        with_tokens: "1",
-      });
-      if (seq !== seqRef.current) return;
-      setData(r);
-      setStatus(`updated ${new Date().toLocaleTimeString("en-GB", { hour12: false })} · ${r.total} sessions`);
-    } catch (e) {
-      if (seq === seqRef.current) setStatus("error");
-      toast((e as Error).message);
-    } finally {
-      if (seq === seqRef.current) setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (overrides?: Partial<typeof stateRef.current>) => {
+      const cur = { ...stateRef.current, ...overrides };
+      if (overrides?.offset !== undefined) setOffset(overrides.offset);
+      setLoading(true);
+      const seq = ++seqRef.current;
+      try {
+        const r = await fetchJSON<SessionsResponse>("sessions", {
+          tool: cur.tools.length ? cur.tools : undefined,
+          q: cur.query || undefined,
+          since: cur.range || undefined,
+          sort: "created",
+          limit: cur.limit,
+          offset: cur.offset,
+          archived: "0",
+          with_tokens: "1",
+        });
+        if (seq !== seqRef.current) return;
+        setData(r);
+        setStatus(
+          `updated ${new Date().toLocaleTimeString("en-GB", { hour12: false })} · ${r.total} sessions`,
+        );
+      } catch (e) {
+        if (seq === seqRef.current) setStatus("error");
+        toast((e as Error).message);
+      } finally {
+        if (seq === seqRef.current) setLoading(false);
+      }
+    },
+    [],
+  );
 
   // Initial load + refresh-key reloads (topbar refresh button).
   useEffect(() => {
@@ -114,7 +148,9 @@ export function SessionsView({ refreshKey }: Props) {
   }, [query]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleTool = (id: string) => {
-    const next = tools.includes(id) ? tools.filter((x) => x !== id) : [...tools, id];
+    const next = tools.includes(id)
+      ? tools.filter((x) => x !== id)
+      : [...tools, id];
     setTools(next);
     void load({ tools: next, offset: 0 });
   };
@@ -131,7 +167,7 @@ export function SessionsView({ refreshKey }: Props) {
   const first = data ? offset + 1 : 0;
   const last = Math.min(offset + limit, total);
   const sum = data?.summary;
-  const cachePct = sum?.cache_pct != null ? sum.cache_pct * 100 : null;
+  const cachePct = sum?.cache_pct == null ? null : sum.cache_pct * 100;
 
   return (
     <div id="sessionsView">
@@ -150,7 +186,13 @@ export function SessionsView({ refreshKey }: Props) {
         </div>
         <div className="seg" id="sessRange" title="Updated since">
           {RANGES.map(([val, label]) => (
-            <button key={label} className={range === val ? "active" : ""} onClick={() => applyRange(val)}>{label}</button>
+            <button
+              key={label}
+              className={range === val ? "active" : ""}
+              onClick={() => applyRange(val)}
+            >
+              {label}
+            </button>
           ))}
         </div>
         <input
@@ -161,15 +203,22 @@ export function SessionsView({ refreshKey }: Props) {
           onChange={(e) => setQuery(e.target.value)}
         />
         <div className="spacer" />
-        <span className="status" id="sessStatus">{status}</span>
+        <span className="status" id="sessStatus">
+          {status}
+        </span>
       </section>
 
       <section className="sess-summary">
         {sum ? (
           <span className="ss-kpis">
-            <span className="k">page</span><span className="v tnum">{sum.sessions}</span>
-            <span className="k">tokens</span><span className="v tnum">{fmtCompact(sum.total_tokens)}</span>
-            <span className="k">cache</span><span className="v">{cachePct != null ? cachePct.toFixed(1) + "%" : "—"}</span>
+            <span className="k">page</span>
+            <span className="v tnum">{sum.sessions}</span>
+            <span className="k">tokens</span>
+            <span className="v tnum">{fmtCompact(sum.total_tokens)}</span>
+            <span className="k">cache</span>
+            <span className="v">
+              {cachePct == null ? "—" : cachePct.toFixed(1) + "%"}
+            </span>
           </span>
         ) : null}
       </section>
@@ -189,7 +238,9 @@ export function SessionsView({ refreshKey }: Props) {
             <thead>
               <tr>
                 <th className="text">created</th>
-                <th className="text" title="tool">tool</th>
+                <th className="text" title="tool">
+                  tool
+                </th>
                 <th className="text">model</th>
                 <th title="tokens used">tokens</th>
                 <th title="cache hit rate">cache</th>
@@ -206,7 +257,11 @@ export function SessionsView({ refreshKey }: Props) {
                 />
               ))}
               {data && !data.sessions.length ? (
-                <tr><td colSpan={7} className="text muted sess-empty">No sessions match the current filters.</td></tr>
+                <tr>
+                  <td colSpan={7} className="text muted sess-empty">
+                    No sessions match the current filters.
+                  </td>
+                </tr>
               ) : null}
             </tbody>
           </table>
@@ -214,15 +269,29 @@ export function SessionsView({ refreshKey }: Props) {
       </section>
 
       <section className="sess-pager">
-        <button disabled={offset <= 0} onClick={() => page(-1)}>‹ prev</button>
-        <span className="tnum">{total ? `${first}–${last} of ${total}` : "0"}</span>
-        <button disabled={last >= total} onClick={() => page(1)}>next ›</button>
+        <button disabled={offset <= 0} onClick={() => page(-1)}>
+          ‹ prev
+        </button>
+        <span className="tnum">
+          {total ? `${first}–${last} of ${total}` : "0"}
+        </span>
+        <button disabled={last >= total} onClick={() => page(1)}>
+          next ›
+        </button>
         <select
           value={limit}
           title="Page size"
-          onChange={(e) => { const n = Number(e.target.value); setLimit(n); void load({ limit: n, offset: 0 }); }}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            setLimit(n);
+            void load({ limit: n, offset: 0 });
+          }}
         >
-          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          {PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
         </select>
         <span className={`loading-dot${loading ? " on" : ""}`} />
       </section>

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,13 +84,104 @@ func TestCodexRolloutDiscoveryIsRecursive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, desc := loadCodex()
+	sessions, desc := loadCodex(0)
 	if desc != "sessions/ (JSONL)" || len(sessions) != 1 {
 		t.Fatalf("loadCodex = %q, %+v", desc, sessions)
 	}
 	got := sessions[0]
 	if got.ID != "deep" || got.Source != "vscode" || got.ModelProvider != "apid" || got.RolloutPath != path {
 		t.Errorf("session = %+v", got)
+	}
+}
+
+func TestFileReadersRespectSince(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CODEX_HOME", filepath.Join(root, "codex"))
+	t.Setenv("CODEX_SQLITE_HOME", filepath.Join(root, "codex-sqlite"))
+	t.Setenv("CLAUDE_HOME", filepath.Join(root, "claude"))
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(root, "pi"))
+	t.Setenv("OPENCODE_DATA_HOME", filepath.Join(root, "opencode"))
+	t.Setenv("OPENCODE_DB", "")
+
+	cutoff := time.Now().Add(-24 * time.Hour).Truncate(time.Second)
+	oldTime := cutoff.Add(-time.Hour)
+	recentTime := cutoff.Add(time.Hour)
+	writeAt := func(path, content string, modified time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, item := range []struct {
+		id string
+		ts time.Time
+	}{
+		{"old", oldTime},
+		{"recent", recentTime},
+	} {
+		stamp := item.ts.Format(time.RFC3339Nano)
+		writeAt(filepath.Join(root, "claude", "projects", "work", "claude-"+item.id+".jsonl"),
+			fmt.Sprintf("{\"type\":\"user\",\"timestamp\":%q,\"cwd\":\"/work\",\"message\":{\"content\":%q}}\n", stamp, item.id), item.ts)
+		writeAt(filepath.Join(root, "pi", "sessions", item.id+".jsonl"),
+			fmt.Sprintf("{\"type\":\"session\",\"id\":\"pi-%s\",\"cwd\":\"/work\",\"timestamp\":%q}\n", item.id, stamp), item.ts)
+		writeAt(filepath.Join(root, "codex", "sessions", "rollout-"+item.id+".jsonl"),
+			fmt.Sprintf("{\"type\":\"session_meta\",\"payload\":{\"id\":\"codex-%s\",\"timestamp\":%q,\"cwd\":\"/work\"}}\n", item.id, stamp), item.ts)
+		writeAt(filepath.Join(root, "opencode", "storage", "session", "info", item.id+".json"),
+			fmt.Sprintf("{\"id\":\"oc-%s\",\"title\":%q,\"directory\":\"/work\",\"time\":{\"created\":%d,\"updated\":%d}}", item.id, item.id, item.ts.UnixMilli(), item.ts.UnixMilli()), item.ts)
+	}
+
+	assertOnly := func(tool, want string, sessions []Session) {
+		t.Helper()
+		if len(sessions) != 1 || sessions[0].ID != want {
+			t.Errorf("%s sessions = %+v, want only %s", tool, sessions, want)
+		}
+	}
+	claude, _ := loadClaude(cutoff.UnixMilli())
+	assertOnly(ToolClaude, "claude-recent", claude)
+	pi, _ := loadPi(cutoff.UnixMilli())
+	assertOnly(ToolPi, "pi-recent", pi)
+	codex, _ := loadCodex(cutoff.UnixMilli())
+	assertOnly(ToolCodex, "codex-recent", codex)
+	opencode, _ := loadOpenCode(cutoff.UnixMilli())
+	assertOnly(ToolOpenCode, "oc-recent", opencode)
+}
+
+func TestLoaderRescansWhenSinceWidens(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", root)
+	sessionsDir := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+	write := func(id string, ts time.Time) {
+		path := filepath.Join(sessionsDir, id+".jsonl")
+		content := fmt.Sprintf("{\"type\":\"session\",\"id\":%q,\"timestamp\":%q}\n", id, ts.Format(time.RFC3339Nano))
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, ts, ts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("recent", now.Add(-time.Hour))
+	write("old", now.Add(-48*time.Hour))
+
+	loader := NewLoaderForTools(ToolPi)
+	recent := loader.List(Query{Since: now.Add(-24 * time.Hour).UnixMilli()}, false)
+	if recent.Total != 1 || recent.Sessions[0].ID != "recent" {
+		t.Fatalf("recent scan = %+v", recent.Sessions)
+	}
+	wide := loader.List(Query{}, false)
+	if wide.Total != 2 {
+		t.Fatalf("widened scan total = %d, want 2", wide.Total)
 	}
 }
 

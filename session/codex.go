@@ -27,27 +27,33 @@ func orString(v sql.NullString, fallback string) string {
 
 // loadCodex returns sessions from the newest state db, or from rollout JSONL
 // files when no state db exists, plus a short description of the backing store.
-func loadCodex() ([]Session, string) {
+func loadCodex(since int64) ([]Session, string) {
 	if db := findStateDB(); db != "" {
-		return loadFromStateDB(db), filepath.Base(db)
+		return loadFromStateDB(db, since), filepath.Base(db)
 	}
 	sessionsDir := filepath.Join(codexHome(), "sessions")
 	if fi, err := os.Stat(sessionsDir); err == nil && fi.IsDir() {
-		return loadFromRolloutFiles(), "sessions/ (JSONL)"
+		return loadFromRolloutFiles(since), "sessions/ (JSONL)"
 	}
 	return nil, ""
 }
 
-func loadFromStateDB(dbPath string) []Session {
+func loadFromStateDB(dbPath string, since int64) []Session {
 	conn, err := openReadOnly(dbPath)
 	if err != nil {
 		return nil
 	}
 	defer conn.Close()
 
-	rows, err := conn.Query(`SELECT id, title, created_at, updated_at,
+	query := `SELECT id, title, created_at, updated_at,
 		source, model_provider, cwd, model, reasoning_effort, tokens_used, archived,
-		cli_version, rollout_path FROM threads`)
+		cli_version, rollout_path FROM threads`
+	var args []any
+	if since > 0 {
+		query += ` WHERE updated_at >= ? OR (updated_at >= ? AND updated_at < ?)`
+		args = []any{since, since / 1000, epochMillisFloor}
+	}
+	rows, err := conn.Query(query, args...)
 	if err != nil {
 		return nil
 	}
@@ -106,9 +112,9 @@ type rolloutMeta struct {
 	} `json:"payload"`
 }
 
-func loadFromRolloutFiles() []Session {
+func loadFromRolloutFiles(since int64) []Session {
 	sessionsDir := filepath.Join(codexHome(), "sessions")
-	matches := walkFiles(sessionsDir, func(name string) bool {
+	matches := walkFiles(sessionsDir, since, func(name string) bool {
 		return filepath.Ext(name) == ".jsonl" && len(name) > len("rollout-") && name[:len("rollout-")] == "rollout-"
 	})
 	var sessions []Session

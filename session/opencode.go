@@ -10,13 +10,13 @@ import (
 
 // loadOpenCode returns sessions from the opencode database, falling back to the
 // pre-db storage/session/info JSON format, plus a store description.
-func loadOpenCode() ([]Session, string) {
+func loadOpenCode(since int64) ([]Session, string) {
 	if db := findOpencodeDB(); db != "" {
-		return loadOpenCodeDB(db), db
+		return loadOpenCodeDB(db, since), db
 	}
 	storage := filepath.Join(opencodeDataHome(), "storage")
 	if fi, err := os.Stat(storage); err == nil && fi.IsDir() {
-		return loadOpenCodeLegacy(), storage + string(filepath.Separator)
+		return loadOpenCodeLegacy(since), storage + string(filepath.Separator)
 	}
 	return nil, ""
 }
@@ -62,14 +62,14 @@ func opencodeModel(value any) (model, provider string) {
 	return provider, provider
 }
 
-func loadOpenCodeDB(dbPath string) []Session {
+func loadOpenCodeDB(dbPath string, since int64) []Session {
 	conn, err := openReadOnly(dbPath)
 	if err != nil {
 		return nil
 	}
 	defer conn.Close()
 
-	cols, err := columnNames(conn, "session")
+	cols, err := sessionColumnNames(conn)
 	if err != nil {
 		return nil
 	}
@@ -97,7 +97,18 @@ func loadOpenCodeDB(dbPath string) []Session {
 		}
 	}
 
-	rows, err := conn.Query("SELECT " + strings.Join(selected, ", ") + " FROM session")
+	query := "SELECT " + strings.Join(selected, ", ") + " FROM session"
+	var args []any
+	if since > 0 {
+		query += " WHERE time_updated >= ? OR (time_updated >= ? AND time_updated < ?)"
+		args = []any{since, since / 1000, epochMillisFloor}
+	}
+	stmt, err := conn.Prepare(query)
+	if err != nil {
+		return nil
+	}
+	defer stmt.Close()
+	rows, err := stmt.Query(args...)
 	if err != nil {
 		return nil
 	}
@@ -121,8 +132,8 @@ func loadOpenCodeDB(dbPath string) []Session {
 	return sessions
 }
 
-func columnNames(conn *sql.DB, table string) ([]string, error) {
-	rows, err := conn.Query("PRAGMA table_info(" + table + ")")
+func sessionColumnNames(conn *sql.DB) ([]string, error) {
+	rows, err := conn.Query("PRAGMA table_info(session)")
 	if err != nil {
 		return nil, err
 	}
@@ -243,11 +254,14 @@ type opencodeLegacyInfo struct {
 	} `json:"time"`
 }
 
-func loadOpenCodeLegacy() []Session {
+func loadOpenCodeLegacy(since int64) []Session {
 	infoDir := filepath.Join(opencodeDataHome(), "storage", "session", "info")
 	matches, _ := filepath.Glob(filepath.Join(infoDir, "*.json"))
 	var sessions []Session
 	for _, path := range matches {
+		if !fileModifiedSince(path, since) {
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue

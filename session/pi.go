@@ -51,12 +51,12 @@ func piEntryTime(entry map[string]any) int64 {
 }
 
 // loadPi returns sessions from the pi agent's JSONL transcripts.
-func loadPi() ([]Session, string) {
+func loadPi(since int64) ([]Session, string) {
 	sessionsDir := filepath.Join(piHome(), "sessions")
 	if fi, err := os.Stat(sessionsDir); err != nil || !fi.IsDir() {
 		return nil, ""
 	}
-	matches := walkFiles(sessionsDir, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
+	matches := walkFiles(sessionsDir, since, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
 	var sessions []Session
 	for _, path := range matches {
 		if s := scanPiSession(path); s != nil {

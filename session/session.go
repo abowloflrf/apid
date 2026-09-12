@@ -18,10 +18,11 @@ import (
 
 // Tool identifiers, matching the python script's tool field.
 const (
-	ToolCodex    = "codex"
-	ToolClaude   = "claude"
-	ToolPi       = "pi"
-	ToolOpenCode = "opencode"
+	ToolCodex        = "codex"
+	ToolClaude       = "claude"
+	ToolPi           = "pi"
+	ToolOpenCode     = "opencode"
+	epochMillisFloor = int64(100_000_000_000)
 )
 
 // Session is one agent session, normalized across all four tools. Field names

@@ -1,8 +1,8 @@
 package session
 
-// Query layer on top of the readers: a Loader caches the full listing scan
-// briefly (the scan touches every transcript file), then filters/sorts/pages
-// per request. Enrichment only touches the requested page, never the cache.
+// Query layer on top of the readers: a Loader caches a bounded listing scan
+// briefly, then filters/sorts/pages per request. Enrichment only touches the
+// requested page, never the cache.
 
 import (
 	"fmt"
@@ -43,13 +43,14 @@ type Result struct {
 
 // Loader caches the listing scan for ttl and enriches through a shared cache.
 type Loader struct {
-	mu      sync.Mutex
-	ttl     time.Duration
-	tools   []string
-	loaded  time.Time
-	sess    []Session
-	sources []SourceInfo
-	enrich  *EnrichCache
+	mu        sync.Mutex
+	ttl       time.Duration
+	tools     []string
+	loaded    time.Time
+	scanSince int64
+	sess      []Session
+	sources   []SourceInfo
+	enrich    *EnrichCache
 }
 
 // NewLoader returns a Loader with a 60s listing cache.
@@ -84,7 +85,7 @@ func (l *Loader) Display(q Query) Result {
 }
 
 func (l *Loader) list(q Query, withTokens, stopAfterPage bool) Result {
-	all, sources := l.scan()
+	all, sources := l.scan(q.Since)
 	all = filterSessions(all, q)
 	sortSessions(all, q.Sort)
 
@@ -124,46 +125,48 @@ func filterSources(sources []SourceInfo, tools []string) []SourceInfo {
 	return out
 }
 
-// scan lists every session once per ttl window.
-func (l *Loader) scan() ([]Session, []SourceInfo) {
+// scan lists sessions within the requested update window once per ttl. A
+// cached wider scan can serve a narrower request; widening the window rescans.
+func (l *Loader) scan(since int64) ([]Session, []SourceInfo) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if time.Since(l.loaded) < l.ttl && l.sess != nil {
+	cacheCovers := l.scanSince == 0 || (since > 0 && l.scanSince <= since)
+	if !l.loaded.IsZero() && time.Since(l.loaded) < l.ttl && cacheCovers {
 		return l.sess, l.sources
 	}
 	var sess []Session
 	var sources []SourceInfo
 
 	if l.wantTool(ToolCodex) {
-		s, desc := loadCodex()
+		s, desc := loadCodex(since)
 		sess = append(sess, s...)
 		if desc != "" {
 			sources = append(sources, SourceInfo{Tool: ToolCodex, Label: "Codex", Desc: desc})
 		}
 	}
 	if l.wantTool(ToolClaude) {
-		s, desc := loadClaude()
+		s, desc := loadClaude(since)
 		sess = append(sess, s...)
 		if desc != "" {
 			sources = append(sources, SourceInfo{Tool: ToolClaude, Label: "Claude", Desc: desc})
 		}
 	}
 	if l.wantTool(ToolPi) {
-		s, desc := loadPi()
+		s, desc := loadPi(since)
 		sess = append(sess, s...)
 		if desc != "" {
 			sources = append(sources, SourceInfo{Tool: ToolPi, Label: "pi", Desc: desc})
 		}
 	}
 	if l.wantTool(ToolOpenCode) {
-		s, desc := loadOpenCode()
+		s, desc := loadOpenCode(since)
 		sess = append(sess, s...)
 		if desc != "" {
 			sources = append(sources, SourceInfo{Tool: ToolOpenCode, Label: "OpenCode", Desc: desc})
 		}
 	}
 
-	l.sess, l.sources, l.loaded = sess, sources, time.Now()
+	l.sess, l.sources, l.loaded, l.scanSince = sess, sources, time.Now(), since
 	return sess, sources
 }
 

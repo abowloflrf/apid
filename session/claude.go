@@ -19,12 +19,12 @@ const (
 )
 
 // loadClaude returns Claude Code sessions across all project dirs.
-func loadClaude() ([]Session, string) {
+func loadClaude(since int64) ([]Session, string) {
 	projectsDir := filepath.Join(claudeHome(), "projects")
 	if fi, err := os.Stat(projectsDir); err != nil || !fi.IsDir() {
 		return nil, ""
 	}
-	matches := walkFiles(projectsDir, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
+	matches := walkFiles(projectsDir, since, func(name string) bool { return filepath.Ext(name) == ".jsonl" })
 	names := claudeSessionNames()
 	var sessions []Session
 	for _, path := range matches {

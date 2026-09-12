@@ -92,7 +92,7 @@ func findOpencodeDB() string {
 	return matches[0]
 }
 
-func walkFiles(root string, match func(string) bool) []string {
+func walkFiles(root string, since int64, match func(string) bool) []string {
 	var paths []string
 	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -101,10 +101,26 @@ func walkFiles(root string, match func(string) bool) []string {
 			}
 			return nil
 		}
-		if !entry.IsDir() && match(entry.Name()) {
+		if !entry.IsDir() && match(entry.Name()) && entryModifiedSince(entry, since) {
 			paths = append(paths, path)
 		}
 		return nil
 	})
 	return paths
+}
+
+func entryModifiedSince(entry os.DirEntry, since int64) bool {
+	if since <= 0 {
+		return true
+	}
+	info, err := entry.Info()
+	return err != nil || info.ModTime().UnixMilli() >= since
+}
+
+func fileModifiedSince(path string, since int64) bool {
+	if since <= 0 {
+		return true
+	}
+	info, err := os.Stat(path)
+	return err != nil || info.ModTime().UnixMilli() >= since
 }

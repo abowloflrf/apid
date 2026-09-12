@@ -323,6 +323,15 @@ func TestSessionsOpenCodeDB(t *testing.T) {
 	if s.TokensUsed != 157 || s.OutputTokens != 25 || s.CacheReadTokens != 30 || s.CacheWriteTokens != 2 {
 		t.Errorf("tokens = %+v", s)
 	}
+
+	now := time.Now().UnixMilli()
+	mustExec(t, db, `INSERT INTO session VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"oc-recent", "/work/recent", "Recent session", now-3600e3, now-1800e3, 0, "0.9.0", "build",
+		"gpt-5", 10, 5, 0, 0, 0, 0)
+	recent := getSessions(t, sessionsServer(t), "tool=opencode&since=24h")
+	if recent.Total != 1 || recent.Sessions[0].ID != "oc-recent" {
+		t.Errorf("recent opencode sessions = %+v", recent.Sessions)
+	}
 }
 
 // TestSessionsFilters: q substring, since, sort=created, invalid params.
@@ -347,7 +356,7 @@ func TestSessionsFilters(t *testing.T) {
 	hour := int64(3600e3)
 	mk("a", "Alpha work", "/work/alpha", now-3*24*hour, now-2*hour)
 	mk("b", "Beta things", "/work/beta", now-3*24*hour, now-1*hour)
-	mk("c", "Gamma", "/home/user/alpha", now-3*24*hour, now-30*60e3)
+	mk("c", "Gamma", "/home/user/alpha", now-3*24*hour, (now-30*60e3)/1000)
 
 	s := sessionsServer(t)
 	// q matches cwd and title, case-insensitive
@@ -356,7 +365,7 @@ func TestSessionsFilters(t *testing.T) {
 		t.Errorf("q=alpha -> %d, want 2", q.Total)
 	}
 	// since (unix ms) filters on updated with >= semantics: only b and c qualify
-	since := getSessions(t, s, "tool=codex&since="+strconv.FormatInt(now-2*hour+1, 10))
+	since := getSessions(t, sessionsServer(t), "tool=codex&since="+strconv.FormatInt(now-2*hour+1, 10))
 	if since.Total != 2 {
 		t.Errorf("since -> %d, want 2", since.Total)
 	}
