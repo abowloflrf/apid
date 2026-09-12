@@ -12,7 +12,7 @@ RUN pnpm build
 # ---- build stage ----
 # Run on the builder's native arch and cross-compile, so multi-platform
 # builds never compile Go under QEMU emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26.7 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1 AS build
 WORKDIR /src
 
 # Cache modules first
@@ -21,8 +21,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 # Build static binary (CGO off: store uses pure-Go sqlite if applicable)
-# GOEXPERIMENT=jsonv2 swaps encoding/json to the v2 engine (v1 semantics kept):
-# ~2x faster SSE chunk decode, ~5x fewer allocations. Build-time only.
+# Go 1.27 enables JSON v2 by default; keep the build-time override available.
 ARG TARGETOS TARGETARCH
 ARG GOEXPERIMENT=jsonv2
 COPY . .
