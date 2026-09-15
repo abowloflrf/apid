@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { AuthError, fetchJSON, onAuthFailure } from "./api";
 import { LoginView } from "./components/Login";
-import { StatsTopbar } from "./components/StatsTopbar";
+import { DashboardTopbar, StatsControls } from "./components/StatsTopbar";
 import { ToastHost } from "./components/Toast";
 import { useStatsQuery } from "./useStatsQuery";
 import { LiveView } from "./views/LiveView";
@@ -17,8 +17,6 @@ export default function App() {
   const [view, setView] = useState(viewFromHash());
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [liveCount, setLiveCount] = useState(0);
-  const [topoRefreshKey, setTopoRefreshKey] = useState(0);
-  const [sessRefreshKey, setSessRefreshKey] = useState(0);
   const q = useStatsQuery();
 
   // View-specific body classes (grid layout etc.), mirroring the original app.
@@ -90,17 +88,14 @@ export default function App() {
 
   return (
     <>
-      <StatsTopbar
-        view={view}
-        onView={goView}
-        q={q}
-        liveCount={liveCount}
-        onRefresh={() => (view === "routes" ? setTopoRefreshKey((k) => k + 1) : view === "sessions" ? setSessRefreshKey((k) => k + 1) : void q.loadAll())}
-      />
+      <div className="topbars">
+        <DashboardTopbar view={view} onView={goView} liveCount={liveCount} />
+        {view === "stats" ? <StatsControls q={q} /> : null}
+      </div>
       <main>
         {view === "stats" && <StatsView q={q} />}
-        {view === "routes" && <TopologyView refreshKey={topoRefreshKey} />}
-        {view === "sessions" && <SessionsView refreshKey={sessRefreshKey} />}
+        {view === "routes" && <TopologyView />}
+        {view === "sessions" && <SessionsView />}
         {view === "live" && <LiveView onLiveCount={setLiveCount} />}
       </main>
       <ToastHost />

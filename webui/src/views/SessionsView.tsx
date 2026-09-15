@@ -86,11 +86,7 @@ function SessionRow({ s, onOpen }: RowProps) {
   );
 }
 
-interface Props {
-  refreshKey: number;
-}
-
-export function SessionsView({ refreshKey }: Props) {
+export function SessionsView() {
   const [tools, setTools] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [range, setRange] = useState("24h");
@@ -99,6 +95,7 @@ export function SessionsView({ refreshKey }: Props) {
   const [data, setData] = useState<SessionsResponse | null>(null);
   const [status, setStatus] = useState("loading…");
   const [loading, setLoading] = useState(false);
+  const [spinning, setSpinning] = useState(false);
   const [modal, setModal] = useState<AgentSession | null>(null);
   const seqRef = useRef(0);
   const stateRef = useRef({ tools, query, range, limit, offset });
@@ -136,10 +133,9 @@ export function SessionsView({ refreshKey }: Props) {
     [],
   );
 
-  // Initial load + refresh-key reloads (topbar refresh button).
   useEffect(() => {
     void load({ offset: 0 });
-  }, [load, refreshKey]);
+  }, [load]);
 
   // Debounced search box.
   useEffect(() => {
@@ -161,6 +157,11 @@ export function SessionsView({ refreshKey }: Props) {
   const page = (delta: number) => {
     const next = Math.max(0, offset + delta * limit);
     void load({ offset: next });
+  };
+  const handleRefresh = () => {
+    setSpinning(true);
+    window.setTimeout(() => setSpinning(false), 600);
+    void load({ offset: 0 });
   };
 
   const total = data?.total ?? 0;
@@ -206,6 +207,15 @@ export function SessionsView({ refreshKey }: Props) {
         <span className="status" id="sessStatus">
           {status}
         </span>
+        <button
+          type="button"
+          className={`refresh${spinning ? " spin" : ""}`}
+          title="Refresh sessions"
+          aria-label="Refresh sessions"
+          onClick={handleRefresh}
+        >
+          ⟳
+        </button>
       </section>
 
       <section className="sess-summary">

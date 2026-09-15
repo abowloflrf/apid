@@ -269,9 +269,6 @@ h3 {
   padding: 9px 14px;
   gap: 8px 10px;
  }
- .topbar .auto {
-  display: none;
- }
  .ranges,
  .seg {
   padding: 2px;
@@ -315,21 +312,18 @@ h3 {
   padding: 9px 14px;
   gap: 8px 10px;
  }
- /* Collapsed: keep only the condensed KPIs + status line as a thin strip. */
+ /* Collapsed: keep only the toggle, refresh, condensed KPIs, and status. */
+ .filters.collapsed .ranges,
+ .filters.collapsed .custom-range,
  .filters.collapsed .filter,
  .filters.collapsed .seg,
+ .filters.collapsed .auto,
  .filters.collapsed > .spacer {
   display: none;
  }
  .ms-toggle {
   min-width: 0;
   flex: 1 1 46%;
- }
- /* Views without filters have no toggle to open. */
- body.view-live .filters-toggle,
- body.view-routes .filters-toggle,
- body.view-sessions .filters-toggle {
-  display: none;
  }
 }
 
@@ -1188,11 +1182,6 @@ body.loading .skel-fill {
    thin meter under the numbers breathes with the instantaneous tokens/s. Same
    quiet furniture as everywhere else — motion is reserved for the data. */
 
-/* Time filters mean nothing for a momentary snapshot. */
-body.view-live .filters {
- display: none;
-}
-
 .tab-badge {
  display: inline-block;
  min-width: 15px;
@@ -1519,11 +1508,6 @@ body.view-live .filters {
    an SVG layer drawing one curve per model rule across the gutter between them.
    The curve, not the text, is what makes "which model goes where" legible at a
    glance; everything else stays in the same quiet vocabulary as the stats view. */
-
-/* The time filters/bucket controls mean nothing for a static config. */
-body.view-routes .filters {
- display: none;
-}
 
 .topo-bar {
  display: flex;
@@ -1905,10 +1889,6 @@ body.view-routes .filters {
 }
 
 /* ---- Sessions view (agent transcripts) ---- */
-
-body.view-sessions .filters {
- display: none;
-}
 
 #sessionsView {
  display: flex;

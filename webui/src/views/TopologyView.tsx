@@ -207,8 +207,9 @@ function setTopoFocus(graph: HTMLElement, sel: { key?: string; up: string } | nu
   rules.forEach((r) => r.classList.toggle("dim", !hit(r)));
 }
 
-export function TopologyView({ refreshKey }: { refreshKey: number }) {
+export function TopologyView() {
   const [topo, setTopo] = useState<Topology | null>(null);
+  const [spinning, setSpinning] = useState(false);
   const graphRef = useRef<HTMLElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const hoverRef = useRef<{ key?: string; up: string } | null>(null);
@@ -223,7 +224,7 @@ export function TopologyView({ refreshKey }: { refreshKey: number }) {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load, refreshKey]);
+  useEffect(() => { void load(); }, [load]);
 
   // Curve endpoints are measured from laid-out DOM, so anything that reflows the
   // cards (window resize, wrapping text, fonts settling) has to redraw them.
@@ -243,9 +244,33 @@ export function TopologyView({ refreshKey }: { refreshKey: number }) {
       ro.disconnect();
       window.removeEventListener("resize", draw);
     };
-  }, [topo, refreshKey]);
+  }, [topo]);
 
-  if (!topo) return <div id="routesView" className="topo-loading">loading topology…</div>;
+  const handleRefresh = () => {
+    setSpinning(true);
+    window.setTimeout(() => setSpinning(false), 600);
+    void load();
+  };
+
+  if (!topo) {
+    return (
+      <div id="routesView">
+        <section className="topo-bar">
+          <span className="status topo-loading">loading topology…</span>
+          <div className="spacer" />
+          <button
+            type="button"
+            className={`refresh${spinning ? " spin" : ""}`}
+            title="Reload routes"
+            aria-label="Reload routes"
+            onClick={handleRefresh}
+          >
+            ⟳
+          </button>
+        </section>
+      </div>
+    );
+  }
 
   const anyDual = (topo.upstreams || []).some((u) => u.supports_responses);
   const search = topo.search
@@ -262,6 +287,16 @@ export function TopologyView({ refreshKey }: { refreshKey: number }) {
         <Chip label="trace" value={topo.trace ? "on" : "off"} on={topo.trace} />
         <Chip label="storage" value={topo.storage ? "on" : "off"} on={topo.storage} />
         {search}
+        <div className="spacer" />
+        <button
+          type="button"
+          className={`refresh${spinning ? " spin" : ""}`}
+          title="Reload routes"
+          aria-label="Reload routes"
+          onClick={handleRefresh}
+        >
+          ⟳
+        </button>
       </section>
       <section className="topo-graph" id="topoGraph" ref={graphRef}>
         <div className="topo-col" id="topoRoutes">
