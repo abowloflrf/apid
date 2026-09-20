@@ -29,6 +29,25 @@ Config uses `[[upstream]]` (backends, referenced by `name`) and `[[route]]`
 (public paths + `model` dispatch rules). Env vars live in `.env` (see
 `.env.example`); full syntax in `config.example.toml`.
 
+Set `default_max_output_tokens = 32768` inside an `[[upstream]]` to supply an
+output budget when the client omits its limit or sends `null`. Omitted/`0`
+disables this feature; negative configuration values are rejected. Explicit
+client limits always win, even when larger than the configured default.
+Responses requests use `max_output_tokens`; Chat (including Responses-to-Chat
+conversion) uses `max_completion_tokens`; Anthropic uses `max_tokens`.
+For legacy Chat upstreams, set `chat_max_tokens_field = "max_tokens"` in the
+same `[[upstream]]`. Omitted/empty defaults to `max_completion_tokens`; only
+these two field names are accepted, and the option is valid only for Chat
+upstreams. It controls both injected defaults and conversion of an explicit
+Responses `max_output_tokens`, even when no default budget is configured.
+Explicit Chat client fields (`max_tokens` or `max_completion_tokens`) are
+preserved without adding another field. Native Responses requests to a
+dual-protocol upstream still use `max_output_tokens`. This works
+for streaming, non-streaming and dual-protocol forwarding. Choose a value
+supported by the upstream model; this does not change its hard limits.
+`codex_subscription` upstreams reject this option to preserve their raw request
+passthrough, including compressed bodies and `/responses/compact` requests.
+
 Graceful shutdown waits up to 120 seconds for in-flight HTTP requests by
 default. Set `APID_SHUTDOWN_TIMEOUT` to another positive Go duration, such as
 `30s` or `3m`, when the surrounding process supervisor allows at least that

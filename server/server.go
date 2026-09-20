@@ -599,11 +599,20 @@ func (s *Server) convertResponsesToChat(ex *exchange) {
 		return
 	}
 
+	if req.MaxOutputTokens == nil && ex.target.cfg.DefaultMaxOutputTokens > 0 {
+		limit := ex.target.cfg.DefaultMaxOutputTokens
+		req.MaxOutputTokens = &limit
+	}
 	chatReq, toolContext, err := convert.ResponsesToChat(&req, s.reasoning)
 	if err != nil {
 		ex.stat.Error = "convert request: " + err.Error()
 		writeError(ex.w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if ex.target.cfg.EffectiveChatMaxTokensField() == "max_tokens" {
+		chatReq.MaxTokens = chatReq.MaxCompletionTokens
+		chatReq.MaxCompletionTokens = nil
 	}
 
 	if ex.model != "" {

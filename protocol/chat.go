@@ -6,18 +6,19 @@ import "encoding/json"
 
 // ChatRequest 对应上游 POST /v1/chat/completions 的请求体。
 type ChatRequest struct {
-	Model             string              `json:"model"`
-	Messages          []ChatMessage       `json:"messages"`
-	Temperature       *float64            `json:"temperature,omitempty"`
-	TopP              *float64            `json:"top_p,omitempty"`
-	MaxTokens         *int                `json:"max_tokens,omitempty"`
-	Stream            bool                `json:"stream,omitempty"`
-	StreamOptions     *StreamOptions      `json:"stream_options,omitempty"`
-	Tools             []ChatTool          `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage     `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string              `json:"reasoning_effort,omitempty"`
-	ResponseFormat    *ChatResponseFormat `json:"response_format,omitempty"`
+	Model               string              `json:"model"`
+	Messages            []ChatMessage       `json:"messages"`
+	Temperature         *float64            `json:"temperature,omitempty"`
+	TopP                *float64            `json:"top_p,omitempty"`
+	MaxTokens           *int                `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                `json:"max_completion_tokens,omitempty"`
+	Stream              bool                `json:"stream,omitempty"`
+	StreamOptions       *StreamOptions      `json:"stream_options,omitempty"`
+	Tools               []ChatTool          `json:"tools,omitempty"`
+	ToolChoice          json.RawMessage     `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool               `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
+	ResponseFormat      *ChatResponseFormat `json:"response_format,omitempty"`
 }
 
 // StreamOptions 对应 Chat Completions 流式请求的 stream_options。

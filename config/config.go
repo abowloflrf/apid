@@ -76,6 +76,17 @@ type Upstream struct {
 	SupportsResponses bool     `toml:"supports_responses"` // backend also speaks OpenAI Responses natively
 	ResponsesPath     string   `toml:"responses_path"`     // optional; empty = derived from Path
 	AuthMode          AuthMode `toml:"auth_mode"`          // empty = normal API key; codex_subscription = fixed credential passthrough
+
+	DefaultMaxOutputTokens int    `toml:"default_max_output_tokens"` // 0 = disabled; only fills missing/null client limits
+	ChatMaxTokensField     string `toml:"chat_max_tokens_field"`     // empty = max_completion_tokens; Chat upstreams only
+}
+
+// EffectiveChatMaxTokensField selects the token field for generated Chat requests.
+func (u Upstream) EffectiveChatMaxTokensField() string {
+	if u.ChatMaxTokensField != "" {
+		return u.ChatMaxTokensField
+	}
+	return "max_completion_tokens"
 }
 
 // EffectiveResponsesPath returns the OpenAI Responses endpoint path actually
@@ -275,6 +286,17 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 		if _, dup := byName[u.Name]; dup {
 			return fmt.Errorf("config: duplicate upstream name %q", u.Name)
 		}
+		if u.DefaultMaxOutputTokens < 0 {
+			return fmt.Errorf("config: upstream %q default_max_output_tokens must be non-negative", u.Name)
+		}
+		if u.ChatMaxTokensField != "" {
+			if u.Protocol != ProtoChat {
+				return fmt.Errorf("config: upstream %q chat_max_tokens_field only applies to openai_chat_completions", u.Name)
+			}
+			if u.ChatMaxTokensField != "max_completion_tokens" && u.ChatMaxTokensField != "max_tokens" {
+				return fmt.Errorf("config: upstream %q chat_max_tokens_field must be max_completion_tokens or max_tokens", u.Name)
+			}
+		}
 		if !isValidProtocol(u.Protocol) {
 			return fmt.Errorf("config: upstream %q has invalid protocol %q", u.Name, u.Protocol)
 		}
@@ -391,6 +413,9 @@ func validateConfig(upstreams []Upstream, routes []Route) error {
 }
 
 func validateCodexSubscriptionUpstream(u Upstream) error {
+	if u.DefaultMaxOutputTokens != 0 {
+		return fmt.Errorf("config: subscription upstream %q must not set default_max_output_tokens", u.Name)
+	}
 	if u.Protocol != ProtoResponses {
 		return fmt.Errorf("config: subscription upstream %q protocol must be %q", u.Name, ProtoResponses)
 	}

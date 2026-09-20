@@ -1835,3 +1835,48 @@ func TestStreamToolsAndReasoning(t *testing.T) {
 		t.Errorf("工具参数未正确拼接, 输出:\n%s", out)
 	}
 }
+
+func TestRequestMaxCompletionTokens(t *testing.T) {
+	positive, zero := 32768, 0
+	for _, tc := range []struct {
+		name  string
+		limit *int
+	}{
+		{name: "omitted"},
+		{name: "positive", limit: &positive},
+		{name: "zero", limit: &zero},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chat, _, err := ResponsesToChat(&protocol.ResponsesRequest{
+				Model: "m", Input: json.RawMessage(`"hi"`), MaxOutputTokens: tc.limit,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(chat)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := fields["max_tokens"]; ok {
+				t.Fatalf("legacy token field: %s", raw)
+			}
+			if tc.limit == nil {
+				if _, ok := fields["max_completion_tokens"]; ok {
+					t.Fatalf("unexpected token field: %s", raw)
+				}
+				return
+			}
+			var got int
+			if err := json.Unmarshal(fields["max_completion_tokens"], &got); err != nil {
+				t.Fatal(err)
+			}
+			if got != *tc.limit {
+				t.Fatalf("limit = %d, want %d", got, *tc.limit)
+			}
+		})
+	}
+}

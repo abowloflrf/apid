@@ -75,10 +75,20 @@ func readLimited(r io.Reader, max int64) ([]byte, error) {
 }
 
 // forwardRaw handles a same-protocol route. It rewrites the model when
-// configured and requests final usage for Chat streams; all other fields pass
-// through unchanged. stat.ClientModel/Stream are already filled by handleRoute.
+// configured, fills missing output limits and requests final usage for Chat
+// streams. Other fields pass through unchanged. stat.ClientModel/Stream are
+// already filled by handleRoute.
 func (s *Server) forwardRaw(ex *exchange) {
 	fwdBody := ex.body
+	if ex.target.cfg.DefaultMaxOutputTokens > 0 {
+		b, err := defaultOutputTokens(fwdBody, ex.proto, ex.target.cfg.DefaultMaxOutputTokens, ex.target.cfg.EffectiveChatMaxTokensField())
+		if err != nil {
+			ex.stat.Error = "default output tokens: " + err.Error()
+			writeError(ex.w, http.StatusBadRequest, "failed to parse request body: "+err.Error())
+			return
+		}
+		fwdBody = b
+	}
 	if ex.model != "" {
 		b, err := overrideModel(fwdBody, ex.model)
 		if err != nil {
@@ -97,7 +107,7 @@ func (s *Server) forwardRaw(ex *exchange) {
 		}
 		fwdBody = b
 	}
-	if ex.trace != nil && (ex.model != "" || ex.proto == config.ProtoChat && ex.stat.Stream) {
+	if ex.trace != nil && (ex.target.cfg.DefaultMaxOutputTokens > 0 || ex.model != "" || ex.proto == config.ProtoChat && ex.stat.Stream) {
 		if path := ex.trace.Dump("upstream", fwdBody); path != "" {
 			s.log.Info("trace upstream request", "file", path)
 		}

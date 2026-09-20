@@ -49,14 +49,14 @@ func ResponsesToChat(r *protocol.ResponsesRequest, src ReasoningSource) (*protoc
 	messages = append(messages, inputMsgs...)
 
 	chat := &protocol.ChatRequest{
-		Model:          r.Model,
-		Messages:       messages,
-		Temperature:    r.Temperature,
-		TopP:           r.TopP,
-		MaxTokens:      r.MaxOutputTokens,
-		Stream:         r.Stream,
-		Tools:          tools,
-		ResponseFormat: convertResponseFormat(r.Text),
+		Model:               r.Model,
+		Messages:            messages,
+		Temperature:         r.Temperature,
+		TopP:                r.TopP,
+		MaxCompletionTokens: r.MaxOutputTokens,
+		Stream:              r.Stream,
+		Tools:               tools,
+		ResponseFormat:      convertResponseFormat(r.Text),
 	}
 	if len(tools) > 0 {
 		chat.ToolChoice = convertToolChoice(r.ToolChoice)

@@ -40,6 +40,17 @@ base_url = "https://api.deepseek.com/v1"
 path = "/chat/completions"
 api_key = "sk-xxx"        # empty = pass through the client's Authorization
 model = "deepseek-chat"   # empty = pass through the client's model
+# Optional default output budget; omitted/0 = leave the upstream default unchanged.
+# Missing/null client limits use this value; explicit values are never capped.
+# Responses uses max_output_tokens; Chat/conversion uses max_completion_tokens;
+# Anthropic uses max_tokens. The configured default must be non-negative.
+# Chat preserves either explicit client token field without adding another.
+# Not supported with auth_mode = "codex_subscription".
+# default_max_output_tokens = 32768
+# Chat upstreams only: field for injected defaults and Responses-to-Chat conversion.
+# Omitted/empty = "max_completion_tokens". Use "max_tokens" for legacy backends.
+# Explicit Chat client fields are passed through unchanged.
+# chat_max_tokens_field = "max_tokens"
 
 [[upstream]]
 name = "openai"
