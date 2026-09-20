@@ -25,14 +25,14 @@ export const fmtRate = (v?: number | null): string => (v ?? 0).toFixed(1);
 // 99-100% range so a near-perfect rate visibly stands apart. Stops are
 // [pct, hue, saturation, text-lightness]. Pass a percentage; null = dash.
 const CACHE_STOPS: [number, number, number, number][] = [
-  [0, 8, 42, 47],
-  [50, 40, 42, 45],
-  [75, 92, 38, 40],
-  [90, 122, 40, 34],
-  [97, 140, 44, 28],
-  [99, 156, 48, 24],
-  [99.7, 168, 52, 20],
-  [100, 178, 56, 17],
+  [0, 8, 22, 43],
+  [50, 38, 24, 38],
+  [75, 100, 14, 38],
+  [90, 140, 17, 34],
+  [97, 153, 19, 30],
+  [99, 163, 21, 28],
+  [99.7, 173, 23, 26],
+  [100, 180, 25, 24],
 ];
 
 const lerp = (a: number, b: number, u: number): number => a + (b - a) * u;
@@ -50,7 +50,7 @@ export function cacheStyle(pct: number): { h: number; s: number; l: number } {
 export function cacheCell(pct: number | null | undefined): ReactNode {
   if (pct == null) return <span className="muted">—</span>;
   const { h, s, l } = cacheStyle(pct);
-  const lBg = 95 - (45 - l) * 0.22;
+  const lBg = 96 - (43 - l) * 0.12;
   // The >=99% "elite" tier gets a distinct ring so a near-perfect rate stands
   // apart at a glance. Kept as its own style property: React style objects do
   // not split properties on semicolons the way an HTML style string does.
@@ -61,7 +61,7 @@ export function cacheCell(pct: number | null | undefined): ReactNode {
       style={{
         color: `hsl(${h} ${s}% ${l}%)`,
         background: `hsl(${h} ${s}% ${lBg}%)`,
-        boxShadow: elite ? `inset 0 0 0 1.5px hsl(${h} ${s}% ${l}% / .7)` : undefined,
+        boxShadow: elite ? `inset 0 0 0 1px hsl(${h} ${s}% ${l}% / .3)` : undefined,
       }}
     >
       {pct.toFixed(2)}%

@@ -1,15 +1,14 @@
-// Muted palette tuned for the warm-paper theme — desaturated, harmonious, never
-// neon. Mirrors the CSS custom properties so chrome and data read as one piece.
+// Muted data colors on white surfaces; neutrals mirror the CSS theme.
 export const C = {
-  blue: "#5f6f96", green: "#6f9576", amber: "#bb9a55", teal: "#5f9499",
-  purple: "#897fa8", rose: "#c07b73", muted: "#7a766c",
-  grid: "rgba(40,36,28,.06)", panel: "#fdfcf9",
+  blue: "#566b80", green: "#607c6c", amber: "#947c55", teal: "#577e80",
+  purple: "#80738f", rose: "#a06b68", muted: "#64748b",
+  grid: "rgba(15,23,42,.06)", panel: "#ffffff",
 };
 
 export const PALETTE = [
-  "#5f6f96", "#6f9576", "#897fa8", "#bb9a55", "#5f9499",
-  "#b98ca0", "#c07b73", "#7c88ad", "#86a98a", "#cbae6e",
-  "#9a90bb", "#74a6ab", "#bf9a7e", "#c79bb0", "#8e9bbf",
+  "#566b80", "#607c6c", "#80738f", "#947c55", "#577e80",
+  "#986e83", "#a06b68", "#7c8da0", "#8ba294", "#b1a080",
+  "#a095af", "#86a3a4", "#a78e7c", "#b49aaa", "#9ba7b5",
 ];
 
 const modelColor: Record<string, string> = {};

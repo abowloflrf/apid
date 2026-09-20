@@ -1,39 +1,37 @@
 :root {
- /* Quiet editorial theme: warm paper ground, hairline rules, near-monochrome
-     chrome. Color is spent only on the data (charts, dots, sparklines), never on
-     the furniture — so the page reads calm and the numbers carry the eye. */
- --bg: #f5f3ee; /* warm paper */
- --panel: #fdfcf9; /* card / warm white */
- --panel-2: #efece3; /* hover · track */
- --panel-3: #e7e3d8;
- --border: #e6e1d6; /* warm hairline */
- --border-strong: #d6d0c2;
- --text: #413e37; /* warm ink */
- --text-strong: #221f19; /* near-black, warm */
- --muted: #7a766c;
- --muted-2: #aaa499;
+ /* White surfaces with coordinated, low-saturation accents. */
+ color-scheme: light;
+ --bg: #f8fafc;
+ --panel: #ffffff;
+ --panel-2: #f1f5f9;
+ --panel-3: #e8edf3;
+ --border: #e5e9ef;
+ --border-strong: #cbd5e1;
+ --text: #334155;
+ --text-strong: #0f172a;
+ --muted: #64748b;
+ --muted-2: #6b7a90;
 
- --accent: #5f6f96; /* muted slate-indigo, the single chrome accent */
- --accent-soft: #eaecf2;
- --green: #6f9576; /* sage */
- --amber: #bb9a55; /* ochre */
- --red: #c07b73; /* clay, used sparingly */
- --red-ink: #a45c54;
- --purple: #897fa8; /* muted lavender */
- --teal: #5f9499;
- --pink: #b98ca0;
+ --accent: #566b80;
+ --accent-soft: #edf1f5;
+ --green: #607c6c; /* sage */
+ --amber: #947c55; /* ochre */
+ --red: #a06b68; /* clay, used sparingly */
+ --red-ink: #925956;
+ --purple: #80738f; /* muted lavender */
+ --teal: #577e80;
+ --pink: #986e83;
 
- /* Agent brand accents for session tool badges: Anthropic terracotta,
-     codex indigo-blue, pi sage (reuses --green), opencode Apple blue. */
- --brand-claude: #c5785b;
- --brand-codex: #7a6fce;
- --brand-opencode: #3d7fc0;
+ /* Muted brand hues for session filters and badges. */
+ --brand-claude: #986f5d;
+ --brand-codex: #796b91;
+ --brand-opencode: #57758f;
 
  /* Shadows are a whisper, reserved for things that genuinely float (popovers,
      toast, tooltips). Cards and bars rely on hairline borders alone. */
- --shadow-sm: 0 1px 1px rgba(40, 36, 28, 0.03);
- --shadow-md: 0 1px 2px rgba(40, 36, 28, 0.05);
- --shadow-pop: 0 10px 30px rgba(40, 36, 28, 0.13);
+ --shadow-sm: 0 1px 1px rgba(15, 23, 42, 0.03);
+ --shadow-md: 0 1px 2px rgba(15, 23, 42, 0.05);
+ --shadow-pop: 0 10px 30px rgba(15, 23, 42, 0.13);
 
  --radius: 10px;
  --mono:
@@ -67,6 +65,14 @@ select {
  font-family: inherit;
  color: inherit;
 }
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+ outline: 2px solid var(--accent);
+ outline-offset: 3px;
+}
+
 .tnum,
 .k-value,
 .data-table td,
@@ -102,7 +108,7 @@ h3 {
  gap: 16px;
  flex-wrap: wrap;
  padding: 14px 26px;
- background: rgba(253, 252, 249, 0.86);
+ background: rgba(255, 255, 255, 0.94);
  backdrop-filter: saturate(120%) blur(8px);
  border-bottom: 1px solid var(--border);
 }
@@ -162,11 +168,11 @@ h3 {
 .seg button:hover {
  color: var(--text-strong);
 }
-/* Active = a quiet white pill (monochrome). The accent stays out of the chrome. */
+/* Blue text marks the selected control on a white surface. */
 .ranges button.active,
 .seg button.active {
  background: var(--panel);
- color: var(--text-strong);
+ color: var(--accent);
  box-shadow: var(--shadow-sm);
 }
 
@@ -246,7 +252,7 @@ h3 {
  flex-wrap: wrap;
  padding: 12px 26px;
  border-bottom: 1px solid var(--border);
- background: rgba(253, 252, 249, 0.86);
+ background: rgba(255, 255, 255, 0.94);
  backdrop-filter: saturate(120%) blur(8px);
 }
 .status {
@@ -834,11 +840,11 @@ main {
  font-weight: 700;
 }
 .pill.ok {
- background: rgba(111, 149, 118, 0.14);
- color: #4d7758;
+ background: color-mix(in srgb, var(--green) 14%, transparent);
+ color: #526e5e;
 }
 .pill.err {
- background: rgba(192, 123, 115, 0.16);
+ background: color-mix(in srgb, var(--red) 16%, transparent);
  color: var(--red-ink);
 }
 .pill.proto {
@@ -848,8 +854,8 @@ main {
  font-weight: 600;
 }
 .pill.dual {
- background: rgba(93, 138, 178, 0.14);
- color: #6d9bc4;
+ background: color-mix(in srgb, var(--brand-opencode) 14%, transparent);
+ color: #57758f;
  border: 1px solid var(--border);
  font-weight: 600;
 }
@@ -891,7 +897,7 @@ main {
  left: 50%;
  transform: translateX(-50%) translateY(20px);
  background: var(--text-strong);
- color: #faf9f6;
+ color: #ffffff;
  padding: 11px 18px;
  border-radius: 10px;
  font-size: 13px;
@@ -926,7 +932,7 @@ main {
 .modal-backdrop {
  position: fixed;
  inset: 0;
- background: rgba(34, 31, 25, 0.34);
+ background: rgba(15, 23, 42, 0.28);
  backdrop-filter: blur(2px);
 }
 .modal-dialog {
@@ -1036,8 +1042,8 @@ main {
  font-size: 11.5px;
  color: var(--red-ink);
  line-height: 1.5;
- background: rgba(192, 123, 115, 0.08);
- border: 1px solid rgba(192, 123, 115, 0.22);
+ background: color-mix(in srgb, var(--red) 8%, transparent);
+ border: 1px solid color-mix(in srgb, var(--red) 22%, transparent);
  border-radius: 8px;
  padding: 10px 12px;
  margin-top: 4px;
@@ -1378,8 +1384,8 @@ body.loading .skel-fill {
  padding: 1px 6px;
 }
 .lc-sse {
- background: rgba(95, 148, 153, 0.16);
- color: #43767b;
+ background: color-mix(in srgb, var(--teal) 16%, transparent);
+ color: #4e7274;
 }
 .lc-sync {
  background: var(--panel-2);
@@ -1637,7 +1643,7 @@ body.loading .skel-fill {
  margin-top: 2px;
 }
 .tc-endpoint.alt {
- color: #6d9bc4;
+ color: #57758f;
 }
 .tc-meta {
  display: flex;
@@ -1725,7 +1731,7 @@ body.loading .skel-fill {
  box-shadow: 0 0 0 3px var(--panel);
 }
 .rule.broken {
- background: rgba(192, 123, 115, 0.1);
+ background: color-mix(in srgb, var(--red) 10%, transparent);
 }
 
 .mode {
@@ -1738,12 +1744,12 @@ body.loading .skel-fill {
  flex: none;
 }
 .mode.forward {
- background: rgba(111, 149, 118, 0.16);
- color: #4d7758;
+ background: color-mix(in srgb, var(--green) 16%, transparent);
+ color: #526e5e;
 }
 .mode.convert {
- background: rgba(187, 154, 85, 0.18);
- color: #8a6f2f;
+ background: color-mix(in srgb, var(--amber) 18%, transparent);
+ color: #806a47;
 }
 
 .model-tag {
@@ -1923,44 +1929,48 @@ body.loading .skel-fill {
 /* Idle: brand-tinted pill, same palette as the session tool badges. */
 .tool-btn.t-codex {
  color: var(--brand-codex);
- background: rgba(122, 111, 206, 0.1);
- border-color: rgba(122, 111, 206, 0.35);
+ background: color-mix(in srgb, var(--brand-codex) 10%, transparent);
+ border-color: color-mix(in srgb, var(--brand-codex) 35%, transparent);
 }
 .tool-btn.t-claude {
  color: var(--brand-claude);
- background: rgba(197, 120, 91, 0.1);
- border-color: rgba(197, 120, 91, 0.35);
+ background: color-mix(in srgb, var(--brand-claude) 10%, transparent);
+ border-color: color-mix(in srgb, var(--brand-claude) 35%, transparent);
 }
 .tool-btn.t-pi {
  color: var(--green);
- background: rgba(111, 149, 118, 0.12);
- border-color: rgba(111, 149, 118, 0.35);
+ background: color-mix(in srgb, var(--green) 12%, transparent);
+ border-color: color-mix(in srgb, var(--green) 35%, transparent);
 }
 .tool-btn.t-opencode {
  color: var(--brand-opencode);
- background: rgba(61, 127, 192, 0.1);
- border-color: rgba(61, 127, 192, 0.35);
+ background: color-mix(in srgb, var(--brand-opencode) 10%, transparent);
+ border-color: color-mix(in srgb, var(--brand-opencode) 35%, transparent);
 }
-/* Active: solid brand fill. */
+/* Active filters keep a pale fill and a clear outline. */
 .tool-btn.t-codex.on {
- background: var(--brand-codex);
+ background: color-mix(in srgb, var(--brand-codex) 16%, white);
  border-color: var(--brand-codex);
- color: #fff;
+ color: var(--brand-codex);
+ box-shadow: inset 0 0 0 1px var(--brand-codex);
 }
 .tool-btn.t-claude.on {
- background: var(--brand-claude);
+ background: color-mix(in srgb, var(--brand-claude) 16%, white);
  border-color: var(--brand-claude);
- color: #fff;
+ color: var(--brand-claude);
+ box-shadow: inset 0 0 0 1px var(--brand-claude);
 }
 .tool-btn.t-pi.on {
- background: var(--green);
+ background: color-mix(in srgb, var(--green) 16%, white);
  border-color: var(--green);
- color: #fff;
+ color: var(--green);
+ box-shadow: inset 0 0 0 1px var(--green);
 }
 .tool-btn.t-opencode.on {
- background: var(--brand-opencode);
+ background: color-mix(in srgb, var(--brand-opencode) 16%, white);
  border-color: var(--brand-opencode);
- color: #fff;
+ color: var(--brand-opencode);
+ box-shadow: inset 0 0 0 1px var(--brand-opencode);
 }
 .tool-btn:hover:not(.on) {
  border-color: currentColor;
@@ -2123,23 +2133,23 @@ body.loading .skel-fill {
 /* Each tool gets a tinted pill in its brand color. */
 .tool-badge.t-codex {
  color: var(--brand-codex);
- background: rgba(122, 111, 206, 0.12);
- border-color: rgba(122, 111, 206, 0.4);
+ background: color-mix(in srgb, var(--brand-codex) 12%, transparent);
+ border-color: color-mix(in srgb, var(--brand-codex) 40%, transparent);
 }
 .tool-badge.t-claude {
  color: var(--brand-claude);
- background: rgba(197, 120, 91, 0.12);
- border-color: rgba(197, 120, 91, 0.4);
+ background: color-mix(in srgb, var(--brand-claude) 12%, transparent);
+ border-color: color-mix(in srgb, var(--brand-claude) 40%, transparent);
 }
 .tool-badge.t-pi {
  color: var(--green);
- background: rgba(111, 149, 118, 0.14);
- border-color: rgba(111, 149, 118, 0.4);
+ background: color-mix(in srgb, var(--green) 14%, transparent);
+ border-color: color-mix(in srgb, var(--green) 40%, transparent);
 }
 .tool-badge.t-opencode {
  color: var(--brand-opencode);
- background: rgba(61, 127, 192, 0.12);
- border-color: rgba(61, 127, 192, 0.4);
+ background: color-mix(in srgb, var(--brand-opencode) 12%, transparent);
+ border-color: color-mix(in srgb, var(--brand-opencode) 40%, transparent);
 }
 
 .pill.archived {
@@ -2194,7 +2204,7 @@ body.loading .skel-fill {
  display: grid;
  grid-template-columns: repeat(3, minmax(0, 1fr));
  border-bottom: 1px solid var(--border);
- background: #faf9f5;
+ background: var(--bg);
 }
 .sd-stat {
  display: flex;

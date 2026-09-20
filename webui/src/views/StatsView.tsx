@@ -119,7 +119,7 @@ const baseOpts = (stacked: boolean) => ({
   plugins: {
     legend: { display: true, labels: { boxWidth: 10, boxHeight: 10, padding: 12 } },
     tooltip: {
-      backgroundColor: "rgba(28, 26, 22, .92)",
+      backgroundColor: "rgba(15, 23, 42, .94)",
       titleFont: { weight: 600 as const },
       bodyFont: { size: 12 },
       padding: 10,
@@ -222,7 +222,7 @@ export function StatsView({ q }: { q: StatsQuery }) {
       plugins: {
         legend: { position: "right", labels: { boxWidth: 10, boxHeight: 10, padding: 8, font: { size: 11 } } },
         tooltip: {
-          backgroundColor: "rgba(28, 26, 22, .92)",
+          backgroundColor: "rgba(15, 23, 42, .94)",
           callbacks: {
             label: (c: { label?: string; raw?: number; dataset: { data: number[] } }) => {
               const total = c.dataset.data.reduce((a, b) => a + b, 0);
@@ -265,7 +265,7 @@ export function StatsView({ q }: { q: StatsQuery }) {
         data: {
           labels,
           datasets: [
-            { label: "avg duration", data: q.ts.map((b) => b.avg_duration_ms), borderColor: C.amber, backgroundColor: "rgba(187,154,85,.12)", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
+            { label: "avg duration", data: q.ts.map((b) => b.avg_duration_ms), borderColor: C.amber, backgroundColor: C.amber + "14", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
             { label: "avg TTFT", data: q.ts.map((b) => b.avg_ttft_ms), borderColor: C.blue, backgroundColor: "transparent", tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
           ],
         },
@@ -276,7 +276,7 @@ export function StatsView({ q }: { q: StatsQuery }) {
         data: {
           labels,
           datasets: [
-            { label: "e2e tok/s", data: q.ts.map((b) => b.e2e_tok_per_sec), borderColor: C.green, backgroundColor: "rgba(111,149,118,.12)", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
+            { label: "e2e tok/s", data: q.ts.map((b) => b.e2e_tok_per_sec), borderColor: C.green, backgroundColor: C.green + "14", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
             { label: "post-TTFT tok/s", data: q.ts.map((b) => b.post_ttft_tok_per_sec), borderColor: C.purple, backgroundColor: "transparent", borderDash: [4, 3], tension: 0.3, pointRadius: 0, borderWidth: 2, hoverBorderWidth: 3 },
           ],
         },
@@ -292,7 +292,7 @@ export function StatsView({ q }: { q: StatsQuery }) {
             borderColor: C.panel,
             borderWidth: 2,
             hoverBorderWidth: 3,
-            hoverBorderColor: "rgba(28,26,22,.12)",
+            hoverBorderColor: "rgba(15,23,42,.12)",
           }],
         },
         options: shareOpts,

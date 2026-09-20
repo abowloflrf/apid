@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { C } from "../colors";
 import type { AgentSession } from "../types";
 import { cacheCell, fmtCompact, fmtInt } from "../format";
 
@@ -42,10 +43,10 @@ function CopyBtn({ value, label }: { value: string; label: string }) {
 }
 
 const TOK_PARTS: { key: string; label: string; color: string }[] = [
-  { key: "input", label: "input", color: "#5f6f96" },
-  { key: "output", label: "output", color: "#6f9576" },
-  { key: "cache read", label: "cache read", color: "#bb9a55" },
-  { key: "cache write", label: "cache write", color: "#897fa8" },
+  { key: "input", label: "input", color: C.blue },
+  { key: "output", label: "output", color: C.green },
+  { key: "cache read", label: "cache read", color: C.amber },
+  { key: "cache write", label: "cache write", color: C.purple },
 ];
 
 // Compact numeric breakdown for the token usage details.
