@@ -570,8 +570,8 @@ func TestRequestToolConversation(t *testing.T) {
 	if !ok {
 		t.Fatal("assistant tool-call message 缺少 content 字段")
 	}
-	if string(content) != `""` {
-		t.Fatalf("assistant tool-call message content = %s, 期望空字符串", content)
+	if string(content) != `null` {
+		t.Fatalf("assistant tool-call message content = %s, want null", content)
 	}
 	tool := chat.Messages[2]
 	if tool.Role != "tool" || tool.ToolCallID != "call_1" || tool.Content != "晴 25度" {

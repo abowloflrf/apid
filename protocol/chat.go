@@ -72,13 +72,15 @@ type ChatImageURL struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// MarshalJSON emits an array only for request messages carrying multimodal
-// parts. Text-only messages keep their original string representation.
+// MarshalJSON preserves content arrays and uses null for tool-only assistant
+// messages so upstream sanitizers do not turn empty text into a placeholder.
 func (m ChatMessage) MarshalJSON() ([]byte, error) {
 	type alias ChatMessage
 	content := any(m.Content)
 	if len(m.ContentParts) > 0 {
 		content = m.ContentParts
+	} else if m.Role == "assistant" && m.Content == "" && len(m.ToolCalls) > 0 {
+		content = nil
 	}
 	return json.Marshal(struct {
 		alias
